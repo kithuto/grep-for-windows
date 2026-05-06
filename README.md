@@ -33,7 +33,7 @@ No external binaries. No dependencies. Just one function that lives in your Powe
 - **Familiar syntax** — `grep -r -i "pattern" .` works exactly like you'd expect.
 - **Literal by default, regex on demand** — pass `-e` (or `--regexp`) to switch to regular expressions.
 - **Colored output** — file paths in magenta, matches highlighted in red, just like GNU grep.
-- **Recursive search** with `-r`.
+- **Recursive search** with `-r` or `--recursive`.
 - **Case-insensitive search** with `-i` or `--ignore-case`.
 - **Directory exclusion** with `--exclude-dir=name` (repeatable).
 - **Zero dependencies** — pure PowerShell, no external binaries to install.
@@ -100,7 +100,7 @@ That's it — `grep` is now available in every new PowerShell session.
 ### Synopsis
 
 ```
-grep [-h | --help] [--version] [--update] [-r] [-i | --ignore-case] [-e | --regexp] <pattern> [path] [--exclude-dir=folder ...]
+grep [-h | --help] [--version] [--update] [-r | --recursive] [-i | --ignore-case] [-e | --regexp] <pattern> [path] [--exclude-dir=folder ...]
 ```
 
 By default, `grep` searches for the pattern as **literal text** (special regex characters are treated as plain characters). Add `-e` or `--regexp` to interpret the pattern as a **regular expression** instead.
@@ -112,7 +112,7 @@ By default, `grep` searches for the pattern as **literal text** (special regex c
 | `-h`, `--help` | Show help and exit. |
 | `--version` | Print the installed version and exit. |
 | `--update` | Check for a newer version on GitHub and update if found. |
-| `-r` | Recursive search through subdirectories. |
+| `-r`, `--recursive` | Recursive search through subdirectories. |
 | `-i`, `--ignore-case` | Case-insensitive match. |
 | `-e`, `--regexp` | Interpret `<pattern>` as a regular expression instead of literal text. |
 | `--exclude-dir=NAME` | Skip any directory named `NAME`. Can be passed multiple times. |

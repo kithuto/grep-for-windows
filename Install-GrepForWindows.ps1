@@ -121,7 +121,7 @@ function Test-GrepExcludedPath {
 }
 
 # grep: text search in files (literal by default, regex with -e | --regexp)
-# Usage: grep [-h | --help] [--version] [--update] [-r] [-i | --ignore-case] [-e | --regexp] <pattern> [path] [--exclude-dir=folder ...]
+# Usage: grep [-h | --help] [--version] [--update] [-r | --recursive] [-i | --ignore-case] [-e | --regexp] <pattern> [path] [--exclude-dir=folder ...]
 function grep {
     param(
         [Parameter(Mandatory = $false, Position = 0)]
@@ -131,6 +131,7 @@ function grep {
         [string]$Path = ".",
 
         [switch]$r,            # recursive search
+        [switch]$recursive,    # long alias for -r
         [switch]$i,            # case-insensitive
         [switch]$ignore_case,  # long alias for -i
         [switch]$e,            # interpret pattern as regex
@@ -141,24 +142,28 @@ function grep {
         [string[]]$ExtraArgs
     )
 
+    $caseSensitive = -not ($i -or $ignore_case)
+    $recurse       = $r.IsPresent -or $recursive.IsPresent
+    $useRegex      = $e.IsPresent -or $regexp.IsPresent
+
     if ($h -or $Pattern -eq '--help') {
         Write-Host
         Write-Host "  grep-for-windows" -ForegroundColor Cyan -NoNewline
-        Write-Host " — Linux-style grep for PowerShell"
+        Write-Host " - Linux-style grep for PowerShell"
         Write-Host
         Write-Host "  USAGE" -ForegroundColor Yellow
         Write-Host "    grep " -NoNewline
         Write-Host "[-h | --help]" -ForegroundColor Green -NoNewline
-        Write-Host " [--version] [--update] [-r] [-i | --ignore-case] [-e | --regexp]"
-        Write-Host "         <pattern> [path] [--exclude-dir=folder ...]"
+        Write-Host " [--version] [--update] [-r | --recursive] [-i | --ignore-case]"
+        Write-Host "         [-e | --regexp] <pattern> [path] [--exclude-dir=folder ...]"
         Write-Host
         Write-Host "  OPTIONS" -ForegroundColor Yellow
-        Write-Host "    " -NoNewline; Write-Host "-h" -ForegroundColor Green -NoNewline; Write-Host ", " -NoNewline; Write-Host "--help" -ForegroundColor Green -NoNewline; Write-Host "           Shows this help and exits."
+        Write-Host "    " -NoNewline; Write-Host "-h" -ForegroundColor Green -NoNewline; Write-Host ", " -NoNewline; Write-Host "--help" -ForegroundColor Green -NoNewline; Write-Host "               Shows this help and exits."
         Write-Host "        " -NoNewline; Write-Host "--version" -ForegroundColor Green -NoNewline; Write-Host "            Shows the installed version and exits."
         Write-Host "        " -NoNewline; Write-Host "--update" -ForegroundColor Green -NoNewline; Write-Host "             Checks for a newer version on GitHub and updates if found."
-        Write-Host "    " -NoNewline; Write-Host "-r" -ForegroundColor Green -NoNewline; Write-Host "                    Recursive search through subdirectories."
-        Write-Host "    " -NoNewline; Write-Host "-i" -ForegroundColor Green -NoNewline; Write-Host ", " -NoNewline; Write-Host "--ignore-case" -ForegroundColor Green -NoNewline; Write-Host "    Case-insensitive match."
-        Write-Host "    " -NoNewline; Write-Host "-e" -ForegroundColor Green -NoNewline; Write-Host ", " -NoNewline; Write-Host "--regexp" -ForegroundColor Green -NoNewline; Write-Host "         Interpret pattern as a regular expression."
+        Write-Host "    " -NoNewline; Write-Host "-r" -ForegroundColor Green -NoNewline; Write-Host ", " -NoNewline; Write-Host "--recursive" -ForegroundColor Green -NoNewline; Write-Host "          Recursive search through subdirectories."
+        Write-Host "    " -NoNewline; Write-Host "-i" -ForegroundColor Green -NoNewline; Write-Host ", " -NoNewline; Write-Host "--ignore-case" -ForegroundColor Green -NoNewline; Write-Host "        Case-insensitive match."
+        Write-Host "    " -NoNewline; Write-Host "-e" -ForegroundColor Green -NoNewline; Write-Host ", " -NoNewline; Write-Host "--regexp" -ForegroundColor Green -NoNewline; Write-Host "             Interpret pattern as a regular expression."
         Write-Host "        " -NoNewline; Write-Host "--exclude-dir=NAME" -ForegroundColor Green -NoNewline; Write-Host "   Skip any directory named NAME. Repeatable."
         Write-Host
         Write-Host "  ARGUMENTS" -ForegroundColor Yellow
@@ -208,7 +213,7 @@ function grep {
     if ($Pattern -eq '--version') {
         $hasExtraArgs = (
             $Path -ne '.' -or
-            $r -or $i -or $ignore_case -or $e -or $regexp -or
+            $recurse -or -not $caseSensitive -or $useRegex -or
             ($ExtraArgs -and $ExtraArgs.Count -gt 0)
         )
         if ($hasExtraArgs) {
@@ -216,7 +221,7 @@ function grep {
             return
         }
         $installedVersion = if ($MyInvocation.MyCommand.ScriptBlock.Module) {
-            # loaded as module — not expected, but handled gracefully
+            # loaded as module - not expected, but handled gracefully
             $null
         } else {
             $profileContent = Get-Content -Path $PROFILE -Raw -ErrorAction SilentlyContinue
@@ -252,10 +257,6 @@ function grep {
         Write-Host "grep: $_" -ForegroundColor Red
         return
     }
-
-    $caseSensitive = -not ($i -or $ignore_case)
-    $recurse       = $r.IsPresent
-    $useRegex      = $e.IsPresent -or $regexp.IsPresent
 
     $files = Get-ChildItem -Path $Path -Recurse:$recurse -File -ErrorAction SilentlyContinue |
         Where-Object { -not (Test-GrepExcludedPath -FullPath $_.FullName -ExcludedDirs $excludedDirs) }
@@ -311,7 +312,7 @@ if ($profileContent -match '# --- grep-for-windows: start ---') {
     } else {
         Write-Host "Installed version: $installedVersion  ->  New version: $newVersion. Updating..."
 
-        # Replace the old block (start marker … end marker) with the new code.
+        # Replace the old block (start marker ... end marker) with the new code.
         # Use literal string indexing to avoid regex replacement-string interpretation
         $startMarker = '# --- grep-for-windows: start ---'
         $endMarker   = '# --- grep-for-windows: end ---'
