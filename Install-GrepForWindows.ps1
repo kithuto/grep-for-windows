@@ -36,22 +36,22 @@ function Write-GrepColoredLine {
     }
 
     try {
-        $matches = [regex]::Matches($Line, $regexPattern, $options)
+        $grep_matches = [regex]::Matches($Line, $regexPattern, $options)
     } catch {
         # If the regex pattern is invalid, display the line without highlighting.
-        $matches = @()
+        $grep_matches = @()
     }
 
     Write-Host "${Path}:" -ForegroundColor Magenta -NoNewline
     Write-Host "${LineNumber}: " -NoNewline
 
-    if ($matches.Count -eq 0 -or ($matches | Where-Object { $_.Length -eq 0 }).Count -gt 0) {
+    if ($grep_matches.Count -eq 0 -or ($grep_matches | Where-Object { $_.Length -eq 0 }).Count -gt 0) {
         Write-Host $Line
         return
     }
 
     $cursor = 0
-    foreach ($m in $matches) {
+    foreach ($m in $grep_matches) {
         if ($m.Index -gt $cursor) {
             Write-Host $Line.Substring($cursor, $m.Index - $cursor) -NoNewline
         }
