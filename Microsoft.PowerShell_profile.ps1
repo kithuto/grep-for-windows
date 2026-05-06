@@ -229,7 +229,7 @@ function grep {
     }
 
     if ([string]::IsNullOrEmpty($Pattern)) {
-        Write-Error "grep: a pattern is required. Run 'grep -h' for help."
+        Write-Host "grep: a pattern is required. Run 'grep -h' for help." -ForegroundColor Red
         return
     }
 

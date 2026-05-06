@@ -235,7 +235,7 @@ function grep {
     }
 
     if ([string]::IsNullOrEmpty($Pattern)) {
-        Write-Error "grep: a pattern is required. Run 'grep -h' for help."
+        Write-Host "grep: a pattern is required. Run 'grep -h' for help." -ForegroundColor Red
         return
     }
 
@@ -312,8 +312,22 @@ if ($profileContent -match '# --- grep-for-windows: start ---') {
         Write-Host "Installed version: $installedVersion  ->  New version: $newVersion. Updating..."
 
         # Replace the old block (start marker … end marker) with the new code.
-        $pattern = '(?s)# --- grep-for-windows: start ---.*?# --- grep-for-windows: end ---'
-        $updatedContent = [regex]::Replace($profileContent, $pattern, $grepCode.Trim())
+        # Use literal string indexing to avoid regex replacement-string interpretation
+        $startMarker = '# --- grep-for-windows: start ---'
+        $endMarker   = '# --- grep-for-windows: end ---'
+        $startIdx = $profileContent.IndexOf($startMarker)
+        $endIdx   = $profileContent.IndexOf($endMarker, $startIdx)
+
+        if ($startIdx -lt 0 -or $endIdx -lt 0) {
+            Write-Host "grep: could not locate the existing grep-for-windows block in $profilePath." -ForegroundColor Red
+            return
+        }
+
+        $endIdx += $endMarker.Length
+        $before = $profileContent.Substring(0, $startIdx)
+        $after  = $profileContent.Substring($endIdx)
+        $updatedContent = $before + $grepCode.Trim() + $after
+
         Set-Content -Path $profilePath -Value $updatedContent -Encoding UTF8 -NoNewline
 
         Write-Host "grep-for-windows updated to $newVersion at: $profilePath"
