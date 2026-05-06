@@ -96,6 +96,7 @@ function Test-GrepExcludedPath {
         [string]$FullPath,
 
         [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
         [string[]]$ExcludedDirs
     )
 
