@@ -21,6 +21,7 @@ No external binaries. No dependencies. Just one function that lives in your Powe
 - [Examples](#examples)
 - [Configuration](#configuration)
 - [Output format](#output-format)
+- [Update](#update)
 - [Uninstall](#uninstall)
 - [Contributing](#contributing)
 - [License](#license)
@@ -99,7 +100,7 @@ That's it — `grep` is now available in every new PowerShell session.
 ### Synopsis
 
 ```
-grep [-r] [-i | --ignore-case] [-e | --regexp] <pattern> [path] [--exclude-dir=folder ...]
+grep [-h | --help] [--version] [--update] [-r] [-i | --ignore-case] [-e | --regexp] <pattern> [path] [--exclude-dir=folder ...]
 ```
 
 By default, `grep` searches for the pattern as **literal text** (special regex characters are treated as plain characters). Add `-e` or `--regexp` to interpret the pattern as a **regular expression** instead.
@@ -108,6 +109,9 @@ By default, `grep` searches for the pattern as **literal text** (special regex c
 
 | Option | Description |
 |---|---|
+| `-h`, `--help` | Show help and exit. |
+| `--version` | Print the installed version and exit. |
+| `--update` | Check for a newer version on GitHub and update if found. |
 | `-r` | Recursive search through subdirectories. |
 | `-i`, `--ignore-case` | Case-insensitive match. |
 | `-e`, `--regexp` | Interpret `<pattern>` as a regular expression instead of literal text. |
@@ -183,6 +187,33 @@ path\to\file.ext:42: line content with the match highlighted
 - The file path is shown in **magenta**.
 - The matched substring is highlighted in **red**.
 - The line number follows the path, separated by a colon — same layout as GNU `grep -n`.
+
+---
+
+## Update
+
+You can update `grep-for-windows` directly from the command line:
+
+```powershell
+grep --update
+```
+
+This fetches the latest `Install-GrepForWindows.ps1` from GitHub, compares the remote version with the one installed in your `$PROFILE`, and:
+
+- If the versions **match** — prints `grep-for-windows X.X.X is already up to date.` and exits.
+- If a **newer version is available** — replaces the old block in your profile with the updated code and reloads the profile automatically, so the new `grep` is available immediately in the current session.
+
+Alternatively, you can run the installer directly as you did during installation:
+
+```powershell
+iex (irm "https://raw.githubusercontent.com/kithuto/grep-for-windows/main/Install-GrepForWindows.ps1")
+```
+
+You can check which version is currently installed at any time with:
+
+```powershell
+grep --version
+```
 
 ---
 
