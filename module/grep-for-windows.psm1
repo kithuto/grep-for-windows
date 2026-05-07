@@ -511,40 +511,26 @@ function grep {
     }
 }
 
-# Removes grep-for-windows completely: deletes the module folder, removes the
-# `Import-Module grep-for-windows` line from $PROFILE, and unloads it from the
-# current session. -WhatIf previews; -Confirm prompts.
+# Removes grep-for-windows: unloads the module from the current session and
+# deletes the module folder. As a courtesy, also strips a stray
+# `Import-Module grep-for-windows` line from $PROFILE if one is present (left
+# over from older installs or a manual edit). -WhatIf previews; -Confirm prompts.
 function Uninstall-GrepForWindows {
     [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'Medium')]
     param()
 
-    $profilePath = $PROFILE
     # Capture the install path before unloading: Remove-Module clears the
     # module info that $MyInvocation.MyCommand.Module would otherwise expose.
     $module      = Get-Module -Name 'grep-for-windows'
     $installDir  = if ($module) { $module.ModuleBase } else { $null }
+    $profilePath = $PROFILE
 
     if (-not $PSCmdlet.ShouldProcess('grep-for-windows', 'Uninstall')) { return }
 
-    # 1. Remove the Import-Module line from $PROFILE.
-    $profileTouched = $false
-    if (Test-Path -LiteralPath $profilePath) {
-        $content = Get-Content -Raw -LiteralPath $profilePath
-        # Match a line consisting of: optional indent, Import-Module, the
-        # module name (with optional quotes), optional trailing comment.
-        $pattern = '(?m)^[ \t]*Import-Module\s+["'']?grep-for-windows["'']?[ \t]*(?:#[^\r\n]*)?\r?\n?'
-        if ($content -match $pattern) {
-            $newContent = [regex]::Replace($content, $pattern, '')
-            Set-Content -LiteralPath $profilePath -Value $newContent -Encoding UTF8 -NoNewline
-            Write-Host "Removed 'Import-Module grep-for-windows' from $profilePath" -ForegroundColor Cyan
-            $profileTouched = $true
-        }
-    }
-
-    # 2. Unload the module so the .psm1 file lock is released.
+    # 1. Unload the module so the .psm1 file lock is released.
     Remove-Module -Name 'grep-for-windows' -Force -ErrorAction SilentlyContinue
 
-    # 3. Remove the module folder from disk.
+    # 2. Remove the module folder from disk.
     $folderRemoved = $false
     if ($installDir -and (Test-Path -LiteralPath $installDir)) {
         Remove-Item -LiteralPath $installDir -Recurse -Force
@@ -552,9 +538,16 @@ function Uninstall-GrepForWindows {
         $folderRemoved = $true
     }
 
-    if (-not $profileTouched -and -not $folderRemoved) {
-        Write-Host "grep-for-windows was not installed; nothing to do." -ForegroundColor Yellow
-        return
+    # 3. Defensive: strip a stray `Import-Module grep-for-windows` line so the
+    #    next session does not try to import a module that no longer exists.
+    if (Test-Path -LiteralPath $profilePath) {
+        $content = Get-Content -Raw -LiteralPath $profilePath
+        $pattern = '(?m)^[ \t]*Import-Module\s+["'']?grep-for-windows["'']?[ \t]*(?:#[^\r\n]*)?\r?\n?'
+        if ($content -match $pattern) {
+            $newContent = [regex]::Replace($content, $pattern, '')
+            Set-Content -LiteralPath $profilePath -Value $newContent -Encoding UTF8 -NoNewline
+            Write-Host "Removed stray 'Import-Module grep-for-windows' line from $profilePath" -ForegroundColor DarkGray
+        }
     }
 
     # 4. PowerShell does not always purge exported function bindings when
@@ -563,6 +556,10 @@ function Uninstall-GrepForWindows {
         if (Test-Path "function:$fn") { Remove-Item "function:$fn" -Force -ErrorAction SilentlyContinue }
     }
 
+    if (-not $folderRemoved) {
+        Write-Host "grep-for-windows was not installed; nothing to do." -ForegroundColor Yellow
+        return
+    }
     Write-Host "grep-for-windows uninstalled." -ForegroundColor Green
 }
 

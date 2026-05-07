@@ -1,8 +1,8 @@
 # Install-GrepForWindows.ps1
-# Downloads grep-for-windows from GitHub, installs it as a PowerShell module
-# under the user's modules path, and adds a single `Import-Module
-# grep-for-windows` line to $PROFILE. Safe to re-run: idempotent and
-# self-updating. Source: https://github.com/kithuto/grep-for-windows
+# Downloads grep-for-windows from GitHub and drops it into the user's modules
+# path. PowerShell's automatic module loading picks it up the first time you
+# run `grep` in any new session. Safe to re-run: idempotent and self-updating.
+# Source: https://github.com/kithuto/grep-for-windows
 
 $ModuleName  = 'grep-for-windows'
 $RepoBase    = 'https://raw.githubusercontent.com/kithuto/grep-for-windows/main/module'
@@ -64,30 +64,12 @@ try {
 # 5. Write the module files.
 if (-not (Test-Path -LiteralPath $installDir)) {
     New-Item -ItemType Directory -Path $installDir -Force | Out-Null
-    Write-Host "Created $installDir"
 }
 Set-Content -LiteralPath $manifestPath -Value $remoteManifest -Encoding UTF8 -NoNewline
 Set-Content -LiteralPath $psm1Path     -Value $remotePsm1     -Encoding UTF8 -NoNewline
 Write-Host "Module files written to $installDir" -ForegroundColor Cyan
 
-# 6. Ensure $PROFILE has an `Import-Module grep-for-windows` line.
-$profilePath = $PROFILE
-if (-not (Test-Path -LiteralPath $profilePath)) {
-    $profileDir = Split-Path -Parent $profilePath
-    if (-not (Test-Path -Path $profileDir)) {
-        New-Item -ItemType Directory -Path $profileDir -Force | Out-Null
-    }
-    New-Item -ItemType File -Path $profilePath -Force | Out-Null
-    Write-Host "Created profile file: $profilePath"
-}
-$profileContent = Get-Content -Raw -LiteralPath $profilePath -ErrorAction SilentlyContinue
-$importPattern  = '(?m)^[ \t]*Import-Module\s+["'']?' + [regex]::Escape($ModuleName) + '["'']?'
-if ($profileContent -notmatch $importPattern) {
-    Add-Content -LiteralPath $profilePath -Value "`r`nImport-Module $ModuleName" -Encoding UTF8
-    Write-Host "Added 'Import-Module $ModuleName' to $profilePath" -ForegroundColor Cyan
-}
-
-# 7. Load it now so `grep` is ready in the current session, not just on next launch.
+# 6. Load it now so `grep` is ready in the current session, not just on next launch.
 Remove-Module $ModuleName -Force -ErrorAction SilentlyContinue
 Import-Module $ModuleName -Force
 

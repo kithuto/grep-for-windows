@@ -28,6 +28,24 @@ grep -B 1 -A 2 "^function" .\script.ps1
 
 ---
 
+## Contents
+
+- [Install](#install)
+- [Requirements](#requirements)
+- [Features](#features)
+- [Usage](#usage)
+- [Reference](#reference)
+- [Output format](#output-format)
+- [Configuration](#configuration)
+- [Update](#update)
+- [Uninstall](#uninstall)
+- [Manual install](#manual-install-without-the-script)
+- [Compatibility notes](#compatibility-notes)
+- [Contributing](#contributing)
+- [License](#license)
+
+---
+
 ## Install
 
 Run this one-liner in any PowerShell session:
@@ -41,9 +59,11 @@ The installer:
 1. Downloads the module to your standard modules folder
    (`~\Documents\PowerShell\Modules\grep-for-windows\` on PowerShell 7+, or
    `~\Documents\WindowsPowerShell\Modules\…` on Windows PowerShell 5.1).
-2. Adds a single `Import-Module grep-for-windows` line to your `$PROFILE`.
-3. Loads the module in the current session, so `grep` works **immediately** —
+2. Loads the module in the current session, so `grep` works **immediately** —
    no shell restart needed.
+
+Your `$PROFILE` is **not** modified. PowerShell's automatic module loading
+picks `grep` up the first time you run it in any new session.
 
 Re-running the same one-liner updates to the latest version, or no-ops if
 you're already up to date.
@@ -224,11 +244,9 @@ Exit codes match GNU `grep`: `0` (match found), `1` (no match), `2` (error).
 ## Configuration
 
 To skip certain folders in **every** search (e.g. `node_modules`, `.git`),
-define `$global:GrepAlwaysExcludedDirs` in your `$PROFILE` *after* the
-`Import-Module` line:
+add `$global:GrepAlwaysExcludedDirs` to your `$PROFILE`:
 
 ```powershell
-Import-Module grep-for-windows
 $global:GrepAlwaysExcludedDirs = @('node_modules', '.git', '__pycache__', 'dist')
 ```
 
@@ -236,8 +254,9 @@ Reload (`. $PROFILE`) or open a new shell. Folders passed explicitly via
 `--exclude-dir=` on the command line are added on top of this list, never
 replacing it.
 
-This setting lives in your profile, not in the module — so module updates
-won't overwrite it.
+This is the only `grep-for-windows` setting that lives in your profile — the
+module itself loads automatically the first time you call `grep`, no
+`Import-Module` line required.
 
 ---
 
@@ -274,12 +293,12 @@ Uninstall-GrepForWindows
 
 This:
 
-1. Removes the `Import-Module grep-for-windows` line from your `$PROFILE`.
-2. Unloads the module from the current session.
-3. Deletes the module folder from disk.
+1. Unloads the module from the current session.
+2. Deletes the module folder from disk.
 
-Nothing is left behind. Pass `-WhatIf` to preview without touching anything,
-or `-Confirm` to be prompted first.
+If you added `$global:GrepAlwaysExcludedDirs` to your `$PROFILE` you can leave
+it (harmless) or remove it manually. Pass `-WhatIf` to preview without
+touching anything, or `-Confirm` to be prompted first.
 
 ---
 
@@ -288,8 +307,8 @@ or `-Confirm` to be prompted first.
 If you'd rather not run a remote script:
 
 1. Clone or download this repository.
-2. Copy the [`module/`](module/) folder to your modules path, renaming it to
-   `grep-for-windows`:
+2. Copy the [`module/`](module/) folder into your modules path, naming the
+   destination folder `grep-for-windows`:
 
    ```powershell
    $dest = Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'PowerShell\Modules\grep-for-windows'
@@ -300,16 +319,9 @@ If you'd rather not run a remote script:
    On Windows PowerShell 5.1, replace `PowerShell` with `WindowsPowerShell` in
    the path above.
 
-3. Add the import line to your profile:
-
-   ```powershell
-   Add-Content -Path $PROFILE -Value "`r`nImport-Module grep-for-windows"
-   ```
-
-   Run `New-Item -ItemType File -Path $PROFILE -Force` first if `$PROFILE`
-   doesn't yet exist.
-
-4. Reload: `. $PROFILE`.
+That's it. PowerShell's automatic module loading will pick up `grep` the next
+time you call it in any new session. To use it immediately in the current
+session: `Import-Module grep-for-windows`.
 
 ---
 
