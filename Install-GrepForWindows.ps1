@@ -74,3 +74,5 @@ Remove-Module $ModuleName -Force -ErrorAction SilentlyContinue
 Import-Module $ModuleName -Force
 
 Write-Host "$ModuleName $remoteVersion installed. 'grep' is ready to use." -ForegroundColor Green
+
+Import-Module grep-for-windows
