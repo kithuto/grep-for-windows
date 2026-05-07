@@ -1,148 +1,177 @@
 # grep-for-windows
 
-> Linux-style `grep` for Windows PowerShell — search files without learning `Select-String`.
+> Linux-style `grep` for PowerShell — same flags, same defaults, same colored output.
 
-`grep-for-windows` is a lightweight PowerShell module that brings the familiar `grep` command to Windows, with both literal and regex search built into a single command. If you come from Linux or macOS and miss running `grep -r "TODO" .` in your terminal, this project gives you the exact same experience on PowerShell — colored output included — without having to memorize `Get-ChildItem | Select-String` pipelines.
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B%20%7C%207%2B-5391FE?logo=powershell)](https://learn.microsoft.com/powershell/)
+[![Platform](https://img.shields.io/badge/platform-Windows-0078D6)](#requirements)
 
-No external binaries. No dependencies. The module lives under your standard PowerShell modules directory and a single `Import-Module grep-for-windows` line in your `$PROFILE` makes `grep` available in every session.
+`grep-for-windows` is a small PowerShell module that gives you the GNU `grep`
+command you already know. If you came to Windows from Linux or macOS and miss
+typing `grep -rn "TODO" .` instead of `Get-ChildItem | Select-String`, this is
+for you. No external binaries, no `git-bash`, no WSL — just one module that
+plugs into your existing PowerShell.
 
----
+```powershell
+# Find every TODO in your project, with line numbers
+grep -rn "TODO" .
 
-## Table of Contents
+# Filter a log file for errors as it grows
+Get-Content .\app.log -Wait | grep -i "error"
 
-- [Features](#features)
-- [Requirements](#requirements)
-- [Installation](#installation)
-  - [Option 1: Install script (recommended)](#option-1-install-script-recommended)
-  - [Option 2: Manual module install](#option-2-manual-module-install)
-- [Usage](#usage)
-  - [Synopsis](#synopsis)
-  - [Options](#options)
-- [Examples](#examples)
-- [Configuration](#configuration)
-- [Output format](#output-format)
-- [Update](#update)
-- [Uninstall](#uninstall)
-- [Contributing](#contributing)
-- [License](#license)
+# Extract every email address in a directory tree
+grep -r -o -e "[\w.+-]+@[\w-]+\.[\w.-]+" .
 
----
-
-## Features
-
-- **Familiar syntax** — `grep -r -i "pattern" .` works exactly like you'd expect.
-- **Literal by default, regex on demand** — pass `-e` (or `--regexp`) to switch to regular expressions.
-- **Colored output** — file paths in magenta, matches highlighted in red, just like GNU grep.
-- **Reads from pipes** — `Get-Content app.log | grep -i "error"` works out of the box.
-- **Recursive search** with `-r` or `--recursive`.
-- **Case-insensitive search** with `-i` or `--ignore-case`.
-- **Word match** with `-w` or `--word-regexp`.
-- **Invert match, count and file listing** with `-v`, `-c` and `-l`.
-- **Only-matching mode** with `-o` to print just the matched substrings.
-- **Context lines** around each match with `-A`, `-B` and `-C` (or their long forms).
-- **File and directory filters** with `--include=GLOB`, `--exclude=GLOB` and `--exclude-dir=NAME` (all repeatable).
-- **Zero dependencies** — pure PowerShell, no external binaries to install.
+# Show the function definitions in a script, with two lines of context
+grep -B 1 -A 2 "^function" .\script.ps1
+```
 
 ---
 
-## Requirements
+## Install
 
-- Windows 10 or later
-- Windows PowerShell 5.1 **or** PowerShell 7+
-
----
-
-## Installation
-
-You can install `grep-for-windows` in two ways. Pick whichever you prefer.
-
-### Option 1: Install script (recommended)
-
-Run this one-liner in PowerShell:
+Run this one-liner in any PowerShell session:
 
 ```powershell
 iex (irm "https://raw.githubusercontent.com/kithuto/grep-for-windows/main/Install-GrepForWindows.ps1")
 ```
 
-The script:
+The installer:
 
-1. Drops the module under your user modules path (e.g. `~\Documents\PowerShell\Modules\grep-for-windows\` on PowerShell 7, or `~\Documents\WindowsPowerShell\Modules\…` on Windows PowerShell 5.1).
-2. Adds a single `Import-Module grep-for-windows` line to your `$PROFILE` (creating the profile file if needed).
-3. Imports the module into the current session, so `grep` is ready immediately — no restart required.
+1. Downloads the module to your standard modules folder
+   (`~\Documents\PowerShell\Modules\grep-for-windows\` on PowerShell 7+, or
+   `~\Documents\WindowsPowerShell\Modules\…` on Windows PowerShell 5.1).
+2. Adds a single `Import-Module grep-for-windows` line to your `$PROFILE`.
+3. Loads the module in the current session, so `grep` works **immediately** —
+   no shell restart needed.
 
-The installer is **idempotent**: re-running it on an up-to-date install is a no-op, and on an older install it overwrites the module folder cleanly. If you previously had the v1 inline-in-`$PROFILE` install, the script also detects and removes that block automatically.
+Re-running the same one-liner updates to the latest version, or no-ops if
+you're already up to date.
 
-> `irm` downloads the script content and `iex` executes it. If you'd rather inspect first, download with `irm <url> -OutFile Install-GrepForWindows.ps1`, review, then run `. .\Install-GrepForWindows.ps1`.
+> `irm` (`Invoke-RestMethod`) downloads the script and `iex`
+> (`Invoke-Expression`) runs it. If you'd rather inspect first:
+> `irm <url> -OutFile Install-GrepForWindows.ps1`, review, then
+> `. .\Install-GrepForWindows.ps1`.
 
-### Option 2: Manual module install
+## Requirements
 
-If you'd rather not run the script:
+- Windows 10 or later
+- Windows PowerShell **5.1** or PowerShell **7+**
 
-1. Download (or `git clone`) this repository.
-2. Copy the [`module/`](module/) folder to your user modules path, renaming it to `grep-for-windows`:
+---
 
-   ```powershell
-   $dest = Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'PowerShell\Modules\grep-for-windows'
-   New-Item -ItemType Directory -Path $dest -Force | Out-Null
-   Copy-Item .\module\* $dest -Force
-   ```
+## Features
 
-   On Windows PowerShell 5.1, replace `PowerShell` with `WindowsPowerShell` in the path above.
-
-3. Add the import line to your profile:
-
-   ```powershell
-   Add-Content -Path $PROFILE -Value "`r`nImport-Module grep-for-windows"
-   ```
-
-   If `$PROFILE` does not exist yet, run `New-Item -ItemType File -Path $PROFILE -Force` first.
-
-4. Reload: `. $PROFILE`.
-
-`grep` is now available in every PowerShell session.
+- **Familiar syntax.** `grep -rni "error" .` does what you'd expect.
+- **Literal by default, regex on demand.** Pass `-e` (or `--regexp`) to switch.
+- **Reads from pipes.** `Get-Content app.log | grep -i "error"` works out of the box.
+- **Recursive search** with directory and glob filters (`-r`, `--include`, `--exclude`, `--exclude-dir`).
+- **Context lines** around each match (`-A`, `-B`, `-C`).
+- **Counting and listing** (`-c`, `-l`).
+- **Invert, word-match, only-matching** (`-v`, `-w`, `-o`).
+- **Streaming output.** Hits print the moment they're found, just like real `grep`.
+- **Colored output.** File paths in magenta, matches in red, context lines kept plain.
+- **GNU grep defaults.** Path shown only on multi-file/recursive search; line numbers off unless `-n`.
+- **Zero dependencies.** Pure PowerShell, no external binaries.
 
 ---
 
 ## Usage
 
-### Synopsis
+### Search a file or directory
 
+```powershell
+grep "TODO" .\notes.txt              # single file → just the matching lines
+grep "TODO" .                        # directory → path-prefixed matches
+grep -r "TODO" .                     # recursive
+grep -ri "todo" .                    # case-insensitive
+grep -rn "TODO" .                    # show line numbers
 ```
-grep [options] <pattern> [path] [filter options...]
-cmd  | grep [options] <pattern>
+
+### Read from stdin (pipes)
+
+```powershell
+"hello","world" | grep "world"
+Get-Content .\app.log | grep -i "error"
+Get-Content .\app.log -Wait | grep -i "error"   # follow the file
 ```
 
-By default, `grep` searches for the pattern as **literal text** (special regex characters are treated as plain characters). Add `-e` or `--regexp` to interpret the pattern as a **regular expression** instead. If no `[path]` is given and input is piped, `grep` reads from the pipeline (stdin).
+### Recurse with filters
 
-### Options
+```powershell
+grep -r "function" . --include="*.ps1"
+grep -r "import"   . --exclude-dir=node_modules --exclude-dir=.git
+grep -r "TODO"     . --include="*.md" --include="*.txt" --exclude="*.bak"
+```
 
-#### General
+### Context around matches
+
+```powershell
+grep -A 2 "function grep" .\script.ps1     # 2 lines after each match
+grep -B 1 "throw" .\error.ps1              # 1 line before each match
+grep -C 3 "ERROR" .\big.log                # 3 lines on either side
+```
+
+Context lines use a `-` separator (e.g., `42-...`) instead of `:`, so match
+lines remain easy to spot even in dense output.
+
+### Counts and file lists
+
+```powershell
+grep -c "TODO" .\notes.txt           # count matching lines in one file
+grep -rc "TODO" .                    # per-file counts, recursive
+grep -rl "function" . --include="*.ps1"   # just print files that contain a match
+```
+
+### Invert, word-match, only-matching
+
+```powershell
+grep -v "DEBUG" .\app.log            # lines that do NOT contain "DEBUG"
+grep -w "grep" .\README.md           # whole-word match
+grep -o -e "[\w]+@[\w.-]+" .\file    # print only the matched substrings
+```
+
+### Patterns starting with `-`
+
+PowerShell strips bare `--`, so quote it explicitly:
+
+```powershell
+grep "--" "-foo" .\file              # pattern is the literal "-foo"
+```
+
+---
+
+## Reference
+
+The full option list, mirroring GNU `grep` where it makes sense.
+
+### General
 
 | Option | Description |
 |---|---|
-| `--help` | Show help and exit. |
+| `--help` | Show the help banner and exit. |
 | `-V`, `--version` | Print the installed version and exit. |
-| `--update` | Check for a newer version on GitHub and update if found. |
+| `--update` | Re-run the installer to fetch the latest version from GitHub. |
 
-#### Pattern selection
+### Pattern selection
 
 | Option | Description |
 |---|---|
-| `-e`, `--regexp` | Interpret `<pattern>` as a regular expression instead of literal text. |
+| `-e`, `--regexp` | Treat `<pattern>` as a regular expression instead of literal text. |
 | `-i`, `--ignore-case` | Case-insensitive match. |
-| `-w`, `--word-regexp` | Match only whole words (wraps the pattern with `\b`). |
+| `-w`, `--word-regexp` | Match whole words only (wraps the pattern with `\b`). |
 | `-v`, `--invert-match` | Print lines that do **not** match. |
 
-#### Output control
+### Output control
 
 | Option | Description |
 |---|---|
 | `-n`, `--line-number` | Prefix each match with its line number. |
 | `-c`, `--count` | Print only a count of matching lines per file. |
-| `-l`, `--files-with-matches` | Print only file names that contain matches. |
-| `-o`, `--only-matching` | Print only the matched parts of a line, one per output line. |
+| `-l`, `--files-with-matches` | Print only the names of files that contain matches. |
+| `-o`, `--only-matching` | Print only the matched portion of a line, one match per output line. |
 
-#### Context control
+### Context
 
 | Option | Description |
 |---|---|
@@ -150,158 +179,86 @@ By default, `grep` searches for the pattern as **literal text** (special regex c
 | `-B NUM`, `--before-context=NUM` | Print `NUM` lines before each match. |
 | `-C NUM`, `--context=NUM` | Print `NUM` lines of context (before and after). |
 
-#### File traversal
+`-A`/`-B`/`-C` can be combined; `-A NUM` and `-B NUM` override `-C` when both are given.
+
+### File traversal
 
 | Option | Description |
 |---|---|
-| `-r`, `--recursive` | Recursive search through subdirectories. |
-| `--include=GLOB` | Search only files whose name matches `GLOB`. Repeatable. |
+| `-r`, `--recursive` | Recurse into subdirectories. |
+| `--include=GLOB` | Include only files whose name matches `GLOB`. Repeatable. |
 | `--exclude=GLOB` | Skip files whose name matches `GLOB`. Repeatable. |
 | `--exclude-dir=NAME` | Skip any directory named `NAME`. Repeatable. |
 
-#### Arguments
+### Arguments
 
 | Argument | Description |
 |---|---|
 | `<pattern>` | Required. The text or regex to search for. |
-| `[path]` | Optional. File or directory to search. Defaults to the current directory (`.`). Use `-` or pipe input to read from stdin. |
-
-> **Heads up:** `-h` is **not** a shortcut for `--help` (it never was in GNU grep either, where `-h` means `--no-filename`). Use `--help`. If you previously aliased `grep -h` in scripts, switch to `grep --help`.
+| `[path]` | Optional. File or directory to search. Defaults to `.`. Use `-` (or pipe) to read from stdin. |
 
 ---
 
-## Examples
+## Output format
 
-Search for the word `TODO` in the current directory:
+`grep-for-windows` follows GNU `grep` defaults: it shows the file path only
+when the search spans multiple files (a directory or recursive search), and it
+prints line numbers only when you ask for them with `-n`.
 
-```powershell
-grep "TODO"
-```
+| Invocation | Output line |
+|---|---|
+| `grep "x" file.txt` | `line content` |
+| `grep -n "x" file.txt` | `42: line content` |
+| `grep "x" .` *(directory)* | `path\file.ext:line content` |
+| `grep -rn "x" .` | `path\file.ext:42: line content` |
+| `cmd \| grep "x"` | `line content` |
+| `cmd \| grep -n "x"` | `42: line content` |
 
-Search recursively, case-insensitive, for `error` starting at `C:\projects\myapp`:
+- File paths are printed in **magenta**, matches highlighted in **red**.
+- Context lines (`-A` / `-B` / `-C`) use a `-` separator instead of `:`.
 
-```powershell
-grep -r -i "error" C:\projects\myapp
-```
-
-Find all email-like strings using regex, recursively:
-
-```powershell
-grep -r -e "[\w.+-]+@[\w-]+\.[\w.-]+" .
-```
-
-Search for `import` excluding `node_modules` and `dist`:
-
-```powershell
-grep -r "import" . --exclude-dir=node_modules --exclude-dir=dist
-```
-
-Find function definitions in a single file (regex mode via long flag):
-
-```powershell
-grep --regexp "^function\s+\w+" .\script.ps1
-```
-
-Read from a pipeline (stdin) and filter case-insensitively:
-
-```powershell
-Get-Content .\app.log | grep -i "error"
-```
-
-Show 2 lines of context before and after each match:
-
-```powershell
-grep -A 2 -B 2 "TODO" .\notes.txt
-# or, equivalently
-grep -C 2 "TODO" .\notes.txt
-```
-
-List only the file names that contain `function`, restricted to `.ps1` files:
-
-```powershell
-grep -r -l "function" . --include="*.ps1"
-```
-
-Count how many `TODO`s each file has, recursively:
-
-```powershell
-grep -r -c "TODO" .
-```
-
-Print only the matched substrings (e.g., extract every email in a tree):
-
-```powershell
-grep -r -o -e "[\w.+-]+@[\w-]+\.[\w.-]+" .
-```
-
-Show lines that do **not** contain `DEBUG`:
-
-```powershell
-grep -v "DEBUG" .\app.log
-```
-
-Match only whole words. `\b` treats hyphens as word boundaries, so `grep` matches `grep-for-windows` but not `mygrep`:
-
-```powershell
-grep -w "grep" .\README.md
-```
+Exit codes match GNU `grep`: `0` (match found), `1` (no match), `2` (error).
 
 ---
 
 ## Configuration
 
-If there are folders you want `grep` to skip in **every** search (for example `node_modules`, `.git`, or `__pycache__`), define `$global:GrepAlwaysExcludedDirs` in your `$PROFILE` **after** the `Import-Module` line:
+To skip certain folders in **every** search (e.g. `node_modules`, `.git`),
+define `$global:GrepAlwaysExcludedDirs` in your `$PROFILE` *after* the
+`Import-Module` line:
 
 ```powershell
 Import-Module grep-for-windows
 $global:GrepAlwaysExcludedDirs = @('node_modules', '.git', '__pycache__', 'dist')
 ```
 
-Reload your profile (`. $PROFILE`) or open a new session. From that point on, those directories are skipped automatically. Any folders you pass via `--exclude-dir=...` on the command line are added on top of this list, so you can still exclude extra folders ad hoc.
+Reload (`. $PROFILE`) or open a new shell. Folders passed explicitly via
+`--exclude-dir=` on the command line are added on top of this list, never
+replacing it.
 
-This approach survives module updates — your customisation lives in `$PROFILE`, not inside the module itself, so `grep --update` won't overwrite it.
-
----
-
-## Output format
-
-Match lines mirror GNU `grep` defaults: the file path is shown only when
-multiple files are involved (directory or recursive search), and the line
-number is shown only when `-n` / `--line-number` is passed.
-
-| Invocation | Output |
-|---|---|
-| `grep "x" file.txt` | `line content` |
-| `grep -n "x" file.txt` | `42: line content` |
-| `grep "x" .` (dir) | `path\file.ext:line content` |
-| `grep -rn "x" .` | `path\file.ext:42: line content` |
-| `cmd \| grep "x"` | `line content` |
-| `cmd \| grep -n "x"` | `42: line content` |
-
-- The file path is shown in **magenta**.
-- The matched substring is highlighted in **red**.
-- Context lines (`-A` / `-B` / `-C`) use a `-` separator instead of `:`, so you
-  can tell match lines from context at a glance.
+This setting lives in your profile, not in the module — so module updates
+won't overwrite it.
 
 ---
 
 ## Update
 
-You can update `grep-for-windows` directly from the command line:
-
 ```powershell
 grep --update
 ```
 
-This fetches the latest `Install-GrepForWindows.ps1` from GitHub and runs it. The installer compares its embedded version against the manifest in your installed module folder; if they match, it prints `is already installed` and exits. Otherwise it overwrites the module files in place and reloads the module in the current session.
+That re-runs the installer, which fetches the latest manifest from GitHub.
+If your installed version matches the remote, nothing happens. Otherwise the
+module files are overwritten in place and the module reloads in the current
+session.
 
-Alternatively, run the installer directly:
+You can also re-run the install one-liner — same effect:
 
 ```powershell
 iex (irm "https://raw.githubusercontent.com/kithuto/grep-for-windows/main/Install-GrepForWindows.ps1")
 ```
 
-Check the installed version any time with:
+Check the installed version any time:
 
 ```powershell
 grep --version
@@ -311,36 +268,77 @@ grep --version
 
 ## Uninstall
 
-Run the bundled uninstaller from any PowerShell session:
-
 ```powershell
 Uninstall-GrepForWindows
 ```
 
-It does three things, in order:
+This:
 
-1. Removes the `Import-Module grep-for-windows` line from your `$PROFILE` (saving a `.bak` copy of the original profile next to it).
-2. Unloads the module from the current session, freeing the `.psm1` file lock.
-3. Deletes the module folder from your modules path.
+1. Removes the `Import-Module grep-for-windows` line from your `$PROFILE`.
+2. Unloads the module from the current session.
+3. Deletes the module folder from disk.
 
-Pass `-WhatIf` to preview without touching anything, or `-Confirm` to be prompted before it runs.
+Nothing is left behind. Pass `-WhatIf` to preview without touching anything,
+or `-Confirm` to be prompted first.
 
-If `grep` failed to import for some reason (broken profile, manifest tampered with), do it manually: delete the `Import-Module grep-for-windows` line from `$PROFILE`, then `Remove-Item -Recurse "$env:USERPROFILE\Documents\PowerShell\Modules\grep-for-windows"`.
+---
+
+## Manual install (without the script)
+
+If you'd rather not run a remote script:
+
+1. Clone or download this repository.
+2. Copy the [`module/`](module/) folder to your modules path, renaming it to
+   `grep-for-windows`:
+
+   ```powershell
+   $dest = Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'PowerShell\Modules\grep-for-windows'
+   New-Item -ItemType Directory -Path $dest -Force | Out-Null
+   Copy-Item .\module\* $dest -Force
+   ```
+
+   On Windows PowerShell 5.1, replace `PowerShell` with `WindowsPowerShell` in
+   the path above.
+
+3. Add the import line to your profile:
+
+   ```powershell
+   Add-Content -Path $PROFILE -Value "`r`nImport-Module grep-for-windows"
+   ```
+
+   Run `New-Item -ItemType File -Path $PROFILE -Force` first if `$PROFILE`
+   doesn't yet exist.
+
+4. Reload: `. $PROFILE`.
+
+---
+
+## Compatibility notes
+
+- **`-h` is not the help shortcut.** GNU `grep` reserves `-h` for `--no-filename`,
+  not help. Use `--help` (or `-?`).
+- **Patterns starting with `-`.** PowerShell strips bare `--` from the command
+  line before reaching the function. To search for a literal `-foo`, quote the
+  end-of-options marker: `grep "--" "-foo" .\file`.
+- **Multiple file arguments.** Currently `grep` accepts one path per
+  invocation. To search several files explicitly, point at their parent
+  directory and use `--include=GLOB`.
 
 ---
 
 ## Contributing
 
-Issues and pull requests are welcome. If you find a bug, have a feature request, or want to improve the documentation, please open an issue on the [GitHub repository](https://github.com/kithuto/grep-for-windows).
+Issues and pull requests are welcome at the
+[GitHub repository](https://github.com/kithuto/grep-for-windows).
 
 When submitting a pull request:
 
 1. Fork the repository and create a feature branch.
-2. Keep changes focused and write a clear commit message.
-3. Test the script in both Windows PowerShell 5.1 and PowerShell 7 if possible.
+2. Keep changes focused; write a clear commit message.
+3. Test on both Windows PowerShell 5.1 and PowerShell 7+ when possible.
 
 ---
 
 ## License
 
-This project is released under the MIT License. See the [`LICENSE`](LICENSE) file for details.
+MIT — see [LICENSE](LICENSE).

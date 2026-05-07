@@ -2,7 +2,7 @@
 # Source: https://github.com/kithuto/grep-for-windows
 @{
     RootModule        = 'grep-for-windows.psm1'
-    ModuleVersion     = '2.0.0'
+    ModuleVersion     = '1.0.0'
     GUID              = 'e76f5ede-fa94-4cd3-9e09-b250ec64c044'
     Author            = 'Ignasi Rovira'
     CompanyName       = 'kithuto'

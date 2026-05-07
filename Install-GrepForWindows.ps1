@@ -1,586 +1,13 @@
-﻿# Install-GrepForWindows.ps1
-# Installs grep-for-windows as a PowerShell module under the user's modules
-# path and adds a single `Import-Module grep-for-windows` line to `$PROFILE`.
-# Safe to re-run: idempotent and self-updating.
-# Source: https://github.com/kithuto/grep-for-windows
+# Install-GrepForWindows.ps1
+# Downloads grep-for-windows from GitHub, installs it as a PowerShell module
+# under the user's modules path, and adds a single `Import-Module
+# grep-for-windows` line to $PROFILE. Safe to re-run: idempotent and
+# self-updating. Source: https://github.com/kithuto/grep-for-windows
 
-$ModuleName    = 'grep-for-windows'
-$ModuleVersion = '2.0.0'
-
-$ManifestContent = @'
-# Module manifest for grep-for-windows.
-# Source: https://github.com/kithuto/grep-for-windows
-@{
-    RootModule        = 'grep-for-windows.psm1'
-    ModuleVersion     = '2.0.0'
-    GUID              = 'e76f5ede-fa94-4cd3-9e09-b250ec64c044'
-    Author            = 'Ignasi Rovira'
-    CompanyName       = 'kithuto'
-    Copyright         = '(c) kithuto. MIT licensed.'
-    Description       = 'Linux-style grep for PowerShell. Search files with familiar grep flags, colored output, recursion, glob filters, context lines and stdin support.'
-    PowerShellVersion = '5.1'
-    FunctionsToExport = @('grep', 'Uninstall-GrepForWindows')
-    CmdletsToExport   = @()
-    VariablesToExport = @()
-    AliasesToExport   = @()
-    PrivateData       = @{
-        PSData = @{
-            Tags        = @('grep', 'search', 'find', 'cli', 'linux', 'unix', 'select-string')
-            LicenseUri  = 'https://github.com/kithuto/grep-for-windows/blob/main/LICENSE'
-            ProjectUri  = 'https://github.com/kithuto/grep-for-windows'
-            ReleaseNotes = 'Restructured as a PowerShell module. Single line in $PROFILE replaces the inline 500-line block.'
-        }
-    }
-}
-'@
-
-$ModuleContent = @'
-# grep-for-windows.psm1
-# Linux-style grep for PowerShell. Source: https://github.com/kithuto/grep-for-windows
-# Public surface: grep, Uninstall-GrepForWindows. All other functions are private helpers.
-
-# Renders a matching line: [path:][lineno: ]line, with hits highlighted in red.
-# Empty Path / LineNumber<=0 skips the corresponding prefix.
-function Write-GrepColoredLine {
-    param(
-        [string]$Path = '',
-        [int]$LineNumber = 0,
-        [Parameter(Mandatory)] [AllowEmptyString()] [string]$Line,
-        [Parameter(Mandatory)] [regex]$HighlightRegex
-    )
-
-    if ($Path)             { Write-Host "${Path}:" -ForegroundColor Magenta -NoNewline }
-    if ($LineNumber -gt 0) { Write-Host "${LineNumber}: " -NoNewline }
-
-    $hits = $HighlightRegex.Matches($Line)
-    # Skip the highlight loop on no hits or any zero-length match (would loop forever).
-    if ($hits.Count -eq 0 -or $hits[0].Length -eq 0) {
-        Write-Host $Line
-        return
-    }
-
-    $cursor = 0
-    foreach ($m in $hits) {
-        if ($m.Index -gt $cursor) {
-            Write-Host $Line.Substring($cursor, $m.Index - $cursor) -NoNewline
-        }
-        Write-Host $m.Value -ForegroundColor Red -NoNewline
-        $cursor = $m.Index + $m.Length
-    }
-    if ($cursor -lt $Line.Length) {
-        Write-Host $Line.Substring($cursor) -NoNewline
-    }
-    Write-Host
-}
-
-# Renders a context line (no highlight) with grep's '-' separator instead of ':'.
-# Empty Path / LineNumber<=0 skips the corresponding prefix.
-function Write-GrepContextLine {
-    param(
-        [string]$Path = '',
-        [int]$LineNumber = 0,
-        [Parameter(Mandatory)] [AllowEmptyString()] [string]$Line
-    )
-    if ($Path)             { Write-Host "${Path}-" -ForegroundColor Magenta -NoNewline }
-    if ($LineNumber -gt 0) { Write-Host "${LineNumber}- " -NoNewline }
-    Write-Host $Line
-}
-
-# Renders one option row of the help text aligned on a single column.
-function Write-GrepHelpRow {
-    param([string]$Short, [Parameter(Mandatory)] [string]$Long, [Parameter(Mandatory)] [string]$Desc)
-    Write-Host '    ' -NoNewline
-    if ($Short) {
-        Write-Host $Short -ForegroundColor Green -NoNewline
-        Write-Host ', ' -NoNewline
-        $col = 4 + $Short.Length + 2
-    } else {
-        Write-Host '    ' -NoNewline
-        $col = 8
-    }
-    Write-Host $Long -ForegroundColor Green -NoNewline
-    $col += $Long.Length
-    # 34 = width of the longest row ('-B NUM, --before-context=NUM' = 32) + 2 spaces.
-    Write-Host (' ' * [Math]::Max(2, 34 - $col)) -NoNewline
-    Write-Host $Desc
-}
-
-# Returns folder names to always exclude. Customise by setting
-# $global:GrepAlwaysExcludedDirs in your $PROFILE *after* Import-Module.
-# Example: $global:GrepAlwaysExcludedDirs = @('node_modules', '.git', '__pycache__')
-function Get-GrepAlwaysExcludedDirs {
-    if ($null -ne $global:GrepAlwaysExcludedDirs) {
-        return @($global:GrepAlwaysExcludedDirs)
-    }
-    return @()
-}
-
-# grep: Linux-style search. Literal by default, regex with -e / --regexp.
-# Uses a non-advanced function (no CmdletBinding) so PowerShell's case-insensitive
-# parameter binder cannot collapse case-distinct flags such as -v vs -V or -c vs -C.
-# All command-line tokens land in $args and are parsed manually.
-function grep {
-    begin {
-        $stdinLines = [System.Collections.Generic.List[string]]::new()
-    }
-
-    process {
-        if ($null -ne $_) { $stdinLines.Add([string]$_) }
-    }
-
-    end {
-        $expectingPipeline = [bool]$MyInvocation.ExpectingInput
-
-        $flagHelp = $false; $flagVersion = $false; $flagUpdate = $false
-        $flagRecursive = $false; $flagIgnoreCase = $false; $flagRegexp = $false
-        $flagInvert = $false; $flagCount = $false; $flagFiles = $false
-        $flagWord = $false; $flagOnly = $false; $flagLineNumber = $false
-        $afterCtx = -1; $beforeCtx = -1; $ctxBoth = -1
-
-        $excludeDirs = [System.Collections.Generic.List[string]]::new()
-        foreach ($d in (Get-GrepAlwaysExcludedDirs)) { $excludeDirs.Add($d) }
-        $include  = [System.Collections.Generic.List[string]]::new()
-        $exclude  = [System.Collections.Generic.List[string]]::new()
-        $realArgs = [System.Collections.Generic.List[string]]::new(2)
-
-        $treatRestAsPositional = $false
-        # Wrap to keep $args as an Object[] without unrolling the if-expression.
-        $argsList = @() + $args
-        $idx = 0
-        $parseError = $null
-
-        while ($idx -lt $argsList.Count) {
-            $a = [string]$argsList[$idx]
-            if (-not $a) { $idx++; continue }
-
-            if ($treatRestAsPositional) { $realArgs.Add($a); $idx++; continue }
-            if ($a -ceq '--')           { $treatRestAsPositional = $true; $idx++; continue }
-
-            $needValueFor = $null
-            switch -CaseSensitive ($a) {
-                '-r' { $flagRecursive  = $true }
-                '-i' { $flagIgnoreCase = $true }
-                '-e' { $flagRegexp     = $true }
-                '-V' { $flagVersion    = $true }
-                '-v' { $flagInvert     = $true }
-                '-c' { $flagCount      = $true }
-                '-l' { $flagFiles      = $true }
-                '-w' { $flagWord       = $true }
-                '-o' { $flagOnly       = $true }
-                '-n' { $flagLineNumber = $true }
-                '-A' { $needValueFor = 'A' }
-                '-B' { $needValueFor = 'B' }
-                '-C' { $needValueFor = 'C' }
-                '--help'                { $flagHelp       = $true }
-                '--version'             { $flagVersion    = $true }
-                '--update'              { $flagUpdate     = $true }
-                '--recursive'           { $flagRecursive  = $true }
-                '--ignore-case'         { $flagIgnoreCase = $true }
-                '--regexp'              { $flagRegexp     = $true }
-                '--invert-match'        { $flagInvert     = $true }
-                '--count'               { $flagCount      = $true }
-                '--files-with-matches'  { $flagFiles      = $true }
-                '--word-regexp'         { $flagWord       = $true }
-                '--only-matching'       { $flagOnly       = $true }
-                '--line-number'         { $flagLineNumber = $true }
-                default {
-                    # Combined short forms with embedded numeric value: -A3, -B5, -C2.
-                    if     ($a -cmatch '^-A(\d+)$') { $afterCtx  = [int]$Matches[1] }
-                    elseif ($a -cmatch '^-B(\d+)$') { $beforeCtx = [int]$Matches[1] }
-                    elseif ($a -cmatch '^-C(\d+)$') { $ctxBoth   = [int]$Matches[1] }
-                    elseif ($a -like '--exclude-dir=*') {
-                        $v = $a.Substring(14).Trim()
-                        if ($v) { $excludeDirs.Add($v) }
-                        else    { $parseError = "invalid argument: '$a'. Use --exclude-dir=folder_name" }
-                    }
-                    elseif ($a -like '--include=*') {
-                        $v = $a.Substring(10).Trim()
-                        if ($v) { $include.Add($v) }
-                        else    { $parseError = "invalid argument: '$a'. Use --include=glob" }
-                    }
-                    elseif ($a -like '--exclude=*') {
-                        $v = $a.Substring(10).Trim()
-                        if ($v) { $exclude.Add($v) }
-                        else    { $parseError = "invalid argument: '$a'. Use --exclude=glob" }
-                    }
-                    elseif ($a -like '--after-context=*') {
-                        $v = $a.Substring(16).Trim()
-                        if ($v -match '^\d+$') { $afterCtx = [int]$v }
-                        else                   { $parseError = "invalid argument: '$a'. Use --after-context=NUM" }
-                    }
-                    elseif ($a -like '--before-context=*') {
-                        $v = $a.Substring(17).Trim()
-                        if ($v -match '^\d+$') { $beforeCtx = [int]$v }
-                        else                   { $parseError = "invalid argument: '$a'. Use --before-context=NUM" }
-                    }
-                    elseif ($a -like '--context=*') {
-                        $v = $a.Substring(10).Trim()
-                        if ($v -match '^\d+$') { $ctxBoth = [int]$v }
-                        else                   { $parseError = "invalid argument: '$a'. Use --context=NUM" }
-                    }
-                    elseif ($a.Length -gt 1 -and $a[0] -eq '-') {
-                        $parseError = "unrecognized option '$a'. Run 'grep --help' for help."
-                    }
-                    else { $realArgs.Add($a) }
-                }
-            }
-
-            if ($parseError) { break }
-
-            if ($needValueFor) {
-                if ($idx + 1 -ge $argsList.Count -or $argsList[$idx + 1] -notmatch '^\d+$') {
-                    $parseError = "option '-$needValueFor' requires a non-negative integer argument."
-                    break
-                }
-                $next = [int]$argsList[$idx + 1]
-                switch ($needValueFor) {
-                    'A' { $afterCtx  = $next }
-                    'B' { $beforeCtx = $next }
-                    'C' { $ctxBoth   = $next }
-                }
-                $idx++
-            }
-            $idx++
-        }
-
-        # Exit codes follow GNU grep: 0 = match found, 1 = no match, 2 = error.
-        $global:LASTEXITCODE = 0
-
-        if ($parseError) {
-            Write-Host "grep: $parseError" -ForegroundColor Red
-            $global:LASTEXITCODE = 2; return
-        }
-
-        if ($flagHelp) {
-            Write-Host
-            Write-Host "  grep-for-windows" -ForegroundColor Cyan -NoNewline
-            Write-Host " - Linux-style grep for PowerShell"
-            Write-Host
-            Write-Host "  USAGE" -ForegroundColor Yellow
-            Write-Host "    grep [options] " -NoNewline
-            Write-Host "<pattern>" -ForegroundColor Magenta -NoNewline
-            Write-Host " " -NoNewline
-            Write-Host "[path]" -ForegroundColor Magenta -NoNewline
-            Write-Host " [filter options...]"
-            Write-Host "    cmd | grep [options] " -NoNewline
-            Write-Host "<pattern>" -ForegroundColor Magenta
-            Write-Host
-            Write-Host "  GENERAL" -ForegroundColor Yellow
-            Write-GrepHelpRow ''   '--help'    'Shows this help and exits.'
-            Write-GrepHelpRow '-V' '--version' 'Shows the installed version and exits.'
-            Write-GrepHelpRow ''   '--update'  'Checks for a newer version on GitHub and updates if found.'
-            Write-Host
-            Write-Host "  PATTERN SELECTION" -ForegroundColor Yellow
-            Write-GrepHelpRow '-e' '--regexp'       'Interpret pattern as a regular expression.'
-            Write-GrepHelpRow '-i' '--ignore-case'  'Case-insensitive match.'
-            Write-GrepHelpRow '-w' '--word-regexp'  'Match only whole words.'
-            Write-GrepHelpRow '-v' '--invert-match' 'Print lines that do NOT match.'
-            Write-Host
-            Write-Host "  OUTPUT CONTROL" -ForegroundColor Yellow
-            Write-GrepHelpRow '-n' '--line-number'        'Prefix each match with its line number.'
-            Write-GrepHelpRow '-c' '--count'              'Print only a count of matching lines per file.'
-            Write-GrepHelpRow '-l' '--files-with-matches' 'Print only file names that contain matches.'
-            Write-GrepHelpRow '-o' '--only-matching'      'Print only the matched parts of a line.'
-            Write-Host
-            Write-Host "  CONTEXT CONTROL" -ForegroundColor Yellow
-            Write-GrepHelpRow '-A NUM' '--after-context=NUM'  'Print NUM lines after each match.'
-            Write-GrepHelpRow '-B NUM' '--before-context=NUM' 'Print NUM lines before each match.'
-            Write-GrepHelpRow '-C NUM' '--context=NUM'        'Print NUM lines of context (before and after).'
-            Write-Host
-            Write-Host "  FILE TRAVERSAL" -ForegroundColor Yellow
-            Write-GrepHelpRow '-r' '--recursive'        'Recurse into subdirectories.'
-            Write-GrepHelpRow ''   '--include=GLOB'     'Search only files whose name matches GLOB. Repeatable.'
-            Write-GrepHelpRow ''   '--exclude=GLOB'     'Skip files whose name matches GLOB. Repeatable.'
-            Write-GrepHelpRow ''   '--exclude-dir=NAME' 'Skip any directory named NAME. Repeatable.'
-            Write-Host
-            Write-Host "  ARGUMENTS" -ForegroundColor Yellow
-            Write-Host "    " -NoNewline; Write-Host "<pattern>" -ForegroundColor Magenta -NoNewline; Write-Host "  Required. The text or regex to search for."
-            Write-Host "    " -NoNewline; Write-Host "[path]" -ForegroundColor Magenta -NoNewline;    Write-Host "     File or directory to search. Defaults to '.'. Use '-' or pipe to read stdin."
-            Write-Host
-            Write-Host "  EXAMPLES" -ForegroundColor Yellow
-            Write-Host "    grep " -NoNewline; Write-Host '"TODO"' -ForegroundColor DarkCyan
-            Write-Host "    grep -r -i " -NoNewline; Write-Host '"error"' -ForegroundColor DarkCyan -NoNewline; Write-Host " C:\projects\myapp"
-            Write-Host "    grep -r -e " -NoNewline; Write-Host '"[\w.+-]+@[\w-]+\.[\w.-]+"' -ForegroundColor DarkCyan -NoNewline; Write-Host " ."
-            Write-Host "    grep -r -l " -NoNewline; Write-Host '"function"' -ForegroundColor DarkCyan -NoNewline; Write-Host ' . --include="*.ps1"'
-            Write-Host "    grep -A 2 -B 2 " -NoNewline; Write-Host '"TODO"' -ForegroundColor DarkCyan -NoNewline; Write-Host " .\notes.txt"
-            Write-Host "    Get-Content .\app.log | grep -i " -NoNewline; Write-Host '"error"' -ForegroundColor DarkCyan
-            Write-Host
-            Write-Host "  TO UNINSTALL" -ForegroundColor Yellow
-            Write-Host "    Uninstall-GrepForWindows" -ForegroundColor Cyan
-            Write-Host
-            return
-        }
-
-        if ($flagUpdate) {
-            Write-Host "Checking for updates..." -ForegroundColor Cyan
-            try {
-                $remoteScript = Invoke-RestMethod -Uri 'https://raw.githubusercontent.com/kithuto/grep-for-windows/main/Install-GrepForWindows.ps1' -ErrorAction Stop
-            } catch {
-                Write-Host "grep: could not reach GitHub. Check your internet connection." -ForegroundColor Red
-                $global:LASTEXITCODE = 2; return
-            }
-            # The install script handles version comparison and idempotent reinstall.
-            Invoke-Expression $remoteScript
-            return
-        }
-
-        if ($flagVersion) {
-            $version = $MyInvocation.MyCommand.Module.Version
-            if ($version) { Write-Host "grep-for-windows $version" }
-            else          { Write-Host "grep-for-windows (version unknown)" }
-            return
-        }
-
-        # Resolve positional args.
-        $pathExplicit = $realArgs.Count -ge 2
-        $Pattern = if ($realArgs.Count -ge 1) { $realArgs[0] } else { '' }
-        $Path    = if ($pathExplicit)        { $realArgs[1] } else { '.' }
-        if ($realArgs.Count -gt 2) {
-            Write-Host "grep: too many positional arguments. Run 'grep --help' for help." -ForegroundColor Red
-            $global:LASTEXITCODE = 2; return
-        }
-        if (-not $Pattern) {
-            Write-Host "grep: a pattern is required. Run 'grep --help' for help." -ForegroundColor Red
-            $global:LASTEXITCODE = 2; return
-        }
-
-        $caseSensitive = -not $flagIgnoreCase
-        $recurse       = $flagRecursive
-        $useRegex      = $flagRegexp
-        $invertMatch   = $flagInvert
-        $countOnly     = $flagCount
-        $filesOnly     = $flagFiles
-        $wordMatch     = $flagWord
-        $onlyMatching  = $flagOnly
-
-        # -C is the default for both -A and -B; explicit -A / -B win.
-        if ($ctxBoth -ge 0) {
-            if ($afterCtx  -lt 0) { $afterCtx  = $ctxBoth }
-            if ($beforeCtx -lt 0) { $beforeCtx = $ctxBoth }
-        }
-        if ($afterCtx  -lt 0) { $afterCtx  = 0 }
-        if ($beforeCtx -lt 0) { $beforeCtx = 0 }
-
-        # Mutually exclusive combinations, mirroring GNU grep:
-        # -l wins over -c; -v overrides -o; -c/-l suppress context output.
-        if ($filesOnly)                { $countOnly = $false }
-        if ($invertMatch)              { $onlyMatching = $false }
-        if ($countOnly -or $filesOnly) { $afterCtx = 0; $beforeCtx = 0 }
-
-        # Stdin mode: pipeline input is used unless an explicit path was given;
-        # '-' as path always means stdin.
-        $isStdinMode = ($expectingPipeline -and -not $pathExplicit) -or ($Path -eq '-')
-        if ($Path -eq '-' -and -not $expectingPipeline) {
-            Write-Host "grep: no input piped to '-'." -ForegroundColor Red
-            $global:LASTEXITCODE = 2; return
-        }
-        if (-not $isStdinMode -and -not (Test-Path -LiteralPath $Path)) {
-            Write-Host "grep: '$Path': No such file or directory" -ForegroundColor Red
-            $global:LASTEXITCODE = 2; return
-        }
-
-        # Match real grep: hide the path prefix when the search target is a
-        # single file (or stdin); show it when scanning a directory or recursing.
-        # Line numbers are off by default and enabled with -n / --line-number.
-        $showFilename   = (-not $isStdinMode) -and (Test-Path -LiteralPath $Path -PathType Container)
-        $showLineNumber = $flagLineNumber
-
-        # Build the search regex. -w wraps with \b; literal mode escapes first.
-        # Compiled flag amortises the per-line .Matches() call when there are many hits.
-        $regexOptions = [System.Text.RegularExpressions.RegexOptions]::Compiled
-        if (-not $caseSensitive) { $regexOptions = $regexOptions -bor [System.Text.RegularExpressions.RegexOptions]::IgnoreCase }
-        $highlightSource = if ($useRegex) { $Pattern } else { [regex]::Escape($Pattern) }
-        if ($wordMatch) { $highlightSource = "\b(?:$highlightSource)\b" }
-
-        try {
-            $highlightRegex = [regex]::new($highlightSource, $regexOptions)
-        } catch {
-            Write-Host "grep: invalid regex pattern '$Pattern'." -ForegroundColor Red
-            $global:LASTEXITCODE = 2; return
-        }
-
-        # Combined regex matching \name\ in any path component (case-insensitive).
-        $excludeRegex = $null
-        if ($excludeDirs.Count -gt 0) {
-            $alternation = ($excludeDirs | ForEach-Object { [regex]::Escape($_) }) -join '|'
-            $excludeRegex = [regex]::new("\\($alternation)\\", 'IgnoreCase')
-        }
-
-        # Pure literal patterns use Select-String -SimpleMatch (faster, no regex parse).
-        $selectStringArgs = @{ CaseSensitive = $caseSensitive }
-        if ($useRegex -or $wordMatch) {
-            $selectStringArgs['Pattern'] = $highlightSource
-        } else {
-            $selectStringArgs['Pattern']     = $Pattern
-            $selectStringArgs['SimpleMatch'] = $true
-        }
-        if ($invertMatch)                              { $selectStringArgs['NotMatch'] = $true }
-        if ($beforeCtx -gt 0 -or $afterCtx -gt 0)      { $selectStringArgs['Context']  = @($beforeCtx, $afterCtx) }
-        # -List makes Select-String stop at the first match per file.
-        if ($filesOnly)                                { $selectStringArgs['List']     = $true }
-
-        # Streaming: matches flow Select-String -> ForEach-Object so each hit prints
-        # the moment it is found. State is held in reference types so mutations
-        # inside ForEach-Object's child scope propagate back. -c accumulates and
-        # prints once at the end; -l prints each path on first hit; default mode
-        # renders match (and context) inline.
-        $state        = @{ Total = 0 }
-        $seenPaths    = [System.Collections.Generic.HashSet[string]]::new()
-        $counts       = [ordered]@{}
-        $lastPrinted  = @{}  # per-file dedupe for context line numbers
-        $hasContext   = $beforeCtx -gt 0 -or $afterCtx -gt 0
-
-        & {
-            if ($isStdinMode) {
-                if ($stdinLines.Count -gt 0) { $stdinLines | Select-String @selectStringArgs }
-                return
-            }
-            $files = Get-ChildItem -Path $Path -Recurse:$recurse -File -ErrorAction SilentlyContinue
-            if ($excludeRegex -or $include.Count -gt 0 -or $exclude.Count -gt 0) {
-                $files = $files | Where-Object {
-                    if ($excludeRegex -and $excludeRegex.IsMatch($_.FullName)) { return $false }
-                    if ($include.Count -gt 0) {
-                        $matched = $false
-                        foreach ($g in $include) { if ($_.Name -like $g) { $matched = $true; break } }
-                        if (-not $matched) { return $false }
-                    }
-                    if ($exclude.Count -gt 0) {
-                        foreach ($g in $exclude) { if ($_.Name -like $g) { return $false } }
-                    }
-                    $true
-                }
-            }
-            $files | Select-String @selectStringArgs
-        } | ForEach-Object {
-            $state.Total++
-            $mi = $_
-            $effPath = if ($showFilename) { $mi.Path } else { '' }
-            $effLn   = if ($showLineNumber) { $mi.LineNumber } else { 0 }
-
-            if ($filesOnly) {
-                $key = if ($isStdinMode) { '(standard input)' } else { $mi.Path }
-                if ($seenPaths.Add($key)) { Write-Host $key -ForegroundColor Magenta }
-                return
-            }
-
-            if ($countOnly) {
-                $key = if ($isStdinMode) { '(standard input)' } else { $mi.Path }
-                if (-not $counts.Contains($key)) { $counts[$key] = 0 }
-                $counts[$key] += 1
-                return
-            }
-
-            $ctxKey = if ($mi.Path) { $mi.Path } else { '<stdin>' }
-
-            if ($hasContext) {
-                $lp = if ($lastPrinted.ContainsKey($ctxKey)) { $lastPrinted[$ctxKey] } else { 0 }
-                $preLines = $mi.Context.PreContext
-                $preStart = $mi.LineNumber - $preLines.Count
-
-                # '--' separator between non-contiguous match groups.
-                if ($lp -gt 0 -and $preStart -gt $lp + 1) { Write-Host "--" }
-
-                for ($k = 0; $k -lt $preLines.Count; $k++) {
-                    $ln = $preStart + $k
-                    if ($ln -le $lp) { continue }
-                    $ctxLn = if ($showLineNumber) { $ln } else { 0 }
-                    Write-GrepContextLine -Path $effPath -LineNumber $ctxLn -Line ([string]$preLines[$k]).TrimEnd()
-                    $lp = $ln
-                }
-                $lastPrinted[$ctxKey] = $lp
-            }
-
-            $lineText = $mi.Line.TrimEnd()
-            if ($onlyMatching -and -not $invertMatch) {
-                foreach ($m in $highlightRegex.Matches($lineText)) {
-                    if ($m.Length -eq 0) { continue }
-                    Write-GrepColoredLine -Path $effPath -LineNumber $effLn -Line $m.Value -HighlightRegex $highlightRegex
-                }
-            } else {
-                Write-GrepColoredLine -Path $effPath -LineNumber $effLn -Line $lineText -HighlightRegex $highlightRegex
-            }
-
-            if ($hasContext) {
-                $lp = $mi.LineNumber
-                $postLines = $mi.Context.PostContext
-                for ($k = 0; $k -lt $postLines.Count; $k++) {
-                    $ln = $mi.LineNumber + $k + 1
-                    if ($ln -le $lp) { continue }
-                    $ctxLn = if ($showLineNumber) { $ln } else { 0 }
-                    Write-GrepContextLine -Path $effPath -LineNumber $ctxLn -Line ([string]$postLines[$k]).TrimEnd()
-                    $lp = $ln
-                }
-                $lastPrinted[$ctxKey] = $lp
-            }
-        }
-
-        if ($countOnly) {
-            foreach ($k in $counts.Keys) {
-                if ($showFilename) {
-                    Write-Host "${k}:" -ForegroundColor Magenta -NoNewline
-                    Write-Host $counts[$k]
-                } else {
-                    Write-Host $counts[$k]
-                }
-            }
-        }
-
-        if ($state.Total -eq 0) { $global:LASTEXITCODE = 1 }
-    }
-}
-
-# Removes grep-for-windows: deletes the module folder, removes the
-# `Import-Module grep-for-windows` line from $PROFILE (with .bak backup), and
-# unloads the module from the current session. -WhatIf previews; -Confirm prompts.
-function Uninstall-GrepForWindows {
-    [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'Medium')]
-    param()
-
-    # Capture the install path before unloading the module (Remove-Module
-    # frees the .psm1 file lock, but invalidates $MyInvocation.MyCommand.Module).
-    $module     = Get-Module -Name 'grep-for-windows'
-    $installDir = if ($module) { $module.ModuleBase } else { $null }
-
-    $profilePath = $PROFILE
-    $profileTouched = $false
-
-    if (-not $PSCmdlet.ShouldProcess('grep-for-windows', 'Uninstall')) { return }
-
-    # 1. Remove the Import-Module line from $PROFILE.
-    if (Test-Path -LiteralPath $profilePath) {
-        $content = Get-Content -Raw -LiteralPath $profilePath
-        # Match a line consisting of: optional indent, Import-Module, the
-        # module name (with optional quotes), optional trailing comment.
-        $pattern = '(?m)^[ \t]*Import-Module\s+["'']?grep-for-windows["'']?[ \t]*(?:#[^\r\n]*)?\r?\n?'
-        if ($content -match $pattern) {
-            $newContent = [regex]::Replace($content, $pattern, '')
-            $backup = "$profilePath.bak"
-            Copy-Item -LiteralPath $profilePath -Destination $backup -Force
-            Set-Content -LiteralPath $profilePath -Value $newContent -Encoding UTF8 -NoNewline
-            Write-Host "Removed 'Import-Module grep-for-windows' from $profilePath" -ForegroundColor Cyan
-            Write-Host "Backup saved to $backup" -ForegroundColor Cyan
-            $profileTouched = $true
-        }
-    }
-
-    # 2. Unload the module so the .psm1 file is no longer locked.
-    Remove-Module -Name 'grep-for-windows' -Force -ErrorAction SilentlyContinue
-
-    # 3. Remove the module folder.
-    if ($installDir -and (Test-Path -LiteralPath $installDir)) {
-        Remove-Item -LiteralPath $installDir -Recurse -Force
-        Write-Host "Removed module folder: $installDir" -ForegroundColor Cyan
-    }
-
-    if (-not $profileTouched -and -not $installDir) {
-        Write-Host "grep-for-windows was not installed; nothing to do." -ForegroundColor Yellow
-        return
-    }
-    Write-Host "grep-for-windows uninstalled." -ForegroundColor Green
-}
-
-Export-ModuleMember -Function 'grep', 'Uninstall-GrepForWindows'
-'@
+$ModuleName  = 'grep-for-windows'
+$RepoBase    = 'https://raw.githubusercontent.com/kithuto/grep-for-windows/main/module'
+$ManifestUrl = "$RepoBase/$ModuleName.psd1"
+$Psm1Url     = "$RepoBase/$ModuleName.psm1"
 
 # 1. Pick the user's module directory. Prefer the first user-writable entry of
 #    $env:PSModulePath; fall back to the canonical Documents path per edition.
@@ -596,48 +23,56 @@ $installDir   = Join-Path $userModuleRoot $ModuleName
 $manifestPath = Join-Path $installDir "$ModuleName.psd1"
 $psm1Path     = Join-Path $installDir "$ModuleName.psm1"
 
-# 2. If already at the same version, exit early so re-runs are cheap.
+# 2. Download the remote manifest first; the version it embeds determines
+#    whether we even need to fetch the (much larger) .psm1.
+Write-Host "Fetching $ModuleName manifest from GitHub..." -ForegroundColor Cyan
+try {
+    $remoteManifest = Invoke-RestMethod -Uri $ManifestUrl -ErrorAction Stop
+} catch {
+    Write-Host "$ModuleName : could not reach $ManifestUrl. Check your internet connection." -ForegroundColor Red
+    return
+}
+if ($remoteManifest -notmatch "ModuleVersion\s*=\s*'([^']+)'") {
+    Write-Host "$ModuleName : remote manifest is missing ModuleVersion field." -ForegroundColor Red
+    return
+}
+$remoteVersion = [Version]$Matches[1]
+
+# 3. If already at the same version, exit early so re-runs are cheap.
 if (Test-Path -LiteralPath $manifestPath) {
     try {
         $existing = Test-ModuleManifest -Path $manifestPath -ErrorAction Stop
-        if ($existing.Version -eq [Version]$ModuleVersion) {
-            Write-Host "$ModuleName $ModuleVersion is already installed at $installDir"
+        if ($existing.Version -eq $remoteVersion) {
+            Write-Host "$ModuleName $remoteVersion is already installed at $installDir"
             return
         }
-        Write-Host "Updating $ModuleName from $($existing.Version) to $ModuleVersion..."
+        Write-Host "Updating $ModuleName from $($existing.Version) to $remoteVersion..."
     } catch {
         Write-Host "Existing manifest is invalid; reinstalling..." -ForegroundColor Yellow
     }
 }
 
-# 3. Write the module files.
+# 4. Download the module body now that we know we need it.
+Write-Host "Fetching $ModuleName module body from GitHub..." -ForegroundColor Cyan
+try {
+    $remotePsm1 = Invoke-RestMethod -Uri $Psm1Url -ErrorAction Stop
+} catch {
+    Write-Host "$ModuleName : could not reach $Psm1Url. Check your internet connection." -ForegroundColor Red
+    return
+}
+
+# 5. Write the module files.
 if (-not (Test-Path -LiteralPath $installDir)) {
     New-Item -ItemType Directory -Path $installDir -Force | Out-Null
     Write-Host "Created $installDir"
 }
-Set-Content -LiteralPath $manifestPath -Value $ManifestContent -Encoding UTF8 -NoNewline
-Set-Content -LiteralPath $psm1Path     -Value $ModuleContent   -Encoding UTF8 -NoNewline
+Set-Content -LiteralPath $manifestPath -Value $remoteManifest -Encoding UTF8 -NoNewline
+Set-Content -LiteralPath $psm1Path     -Value $remotePsm1     -Encoding UTF8 -NoNewline
 Write-Host "Module files written to $installDir" -ForegroundColor Cyan
 
-# 4. Migrate from a legacy marker-based $PROFILE install if present.
+# 6. Ensure $PROFILE has an `Import-Module grep-for-windows` line.
 $profilePath = $PROFILE
-$profileExists = Test-Path -LiteralPath $profilePath
-if ($profileExists) {
-    $content = Get-Content -Raw -LiteralPath $profilePath
-    $startEsc = [regex]::Escape('# --- grep-for-windows: start ---')
-    $endEsc   = [regex]::Escape('# --- grep-for-windows: end ---')
-    $legacyPattern = '(?sm)^' + $startEsc + '.*?^' + $endEsc + '[ \t]*\r?\n?'
-    if ($content -match $legacyPattern) {
-        $content = [regex]::Replace($content, $legacyPattern, '')
-        $backup = "$profilePath.bak"
-        Copy-Item -LiteralPath $profilePath -Destination $backup -Force
-        Set-Content -LiteralPath $profilePath -Value $content -Encoding UTF8 -NoNewline
-        Write-Host "Migrated legacy v1 install: removed marker block from $profilePath (backup: $backup)" -ForegroundColor Cyan
-    }
-}
-
-# 5. Ensure $PROFILE has an `Import-Module grep-for-windows` line.
-if (-not $profileExists) {
+if (-not (Test-Path -LiteralPath $profilePath)) {
     $profileDir = Split-Path -Parent $profilePath
     if (-not (Test-Path -Path $profileDir)) {
         New-Item -ItemType Directory -Path $profileDir -Force | Out-Null
@@ -646,14 +81,14 @@ if (-not $profileExists) {
     Write-Host "Created profile file: $profilePath"
 }
 $profileContent = Get-Content -Raw -LiteralPath $profilePath -ErrorAction SilentlyContinue
-$importPattern  = '(?m)^[ \t]*Import-Module\s+["''"]?' + [regex]::Escape($ModuleName) + '["''"]?'
+$importPattern  = '(?m)^[ \t]*Import-Module\s+["'']?' + [regex]::Escape($ModuleName) + '["'']?'
 if ($profileContent -notmatch $importPattern) {
     Add-Content -LiteralPath $profilePath -Value "`r`nImport-Module $ModuleName" -Encoding UTF8
     Write-Host "Added 'Import-Module $ModuleName' to $profilePath" -ForegroundColor Cyan
 }
 
-# 6. Load it now so `grep` is ready in the current session, not just on next launch.
+# 7. Load it now so `grep` is ready in the current session, not just on next launch.
 Remove-Module $ModuleName -Force -ErrorAction SilentlyContinue
 Import-Module $ModuleName -Force
 
-Write-Host "$ModuleName $ModuleVersion installed. 'grep' is ready to use." -ForegroundColor Green
+Write-Host "$ModuleName $remoteVersion installed. 'grep' is ready to use." -ForegroundColor Green
