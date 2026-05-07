@@ -157,6 +157,7 @@ function grep {
                 '--word-regexp'           { $flagWord         = $true }
                 '--only-matching'         { $flagOnly         = $true }
                 '--line-number'           { $flagLineNumber   = $true }
+                '-'                       { $stopArgs         = $true }
                 default {
                     # Combined short forms with embedded numeric value: -A3, -B5, -C2, -m10.
                     if     ($a -cmatch '^-A(\d+)$') { $afterCtx  = [int]$Matches[1] }
@@ -231,7 +232,7 @@ function grep {
                     elseif ($a -ceq '--regexp') {
                         $parseError = "option '--regexp' requires a value. Use --regexp=PATTERN."
                     }
-                    elseif ($a.Length -gt 1 -and $a[0] -eq '-' -and -not $flagFixed) {
+                    elseif ($a.Length -gt 1 -and $a[0] -eq '-' -and -not $flagFixed -and -not $stopArgs) {
                         $parseError = "unrecognized option '$a'. Run 'grep --help' for help."
                     }
                     else { $realArgs.Add($a) }
@@ -326,6 +327,16 @@ function grep {
             Write-Host "  ARGUMENTS" -ForegroundColor Yellow
             Write-Host "    " -NoNewline; Write-Host "<pattern>" -ForegroundColor Magenta -NoNewline; Write-Host "  Required. The text or regex to search for."
             Write-Host "    " -NoNewline; Write-Host "[path]" -ForegroundColor Magenta -NoNewline;    Write-Host "     File or directory to search. Defaults to '.'. Use '-' or pipe to read stdin."
+            Write-Host "    If <pattern> starts with '-', prefix a bare " -NoNewline -ForegroundColor DarkGray
+            Write-Host "-" -ForegroundColor Green -NoNewline
+            Write-Host " to stop option parsing (like " -NoNewline -ForegroundColor DarkGray
+            Write-Host "--" -ForegroundColor Green -NoNewline
+            Write-Host " in GNU grep): grep -r - '-foo' ." -ForegroundColor DarkGray
+            Write-Host "    Alternatively, use " -NoNewline -ForegroundColor DarkGray
+            Write-Host "-e '-foo'" -ForegroundColor Green -NoNewline
+            Write-Host " or " -NoNewline -ForegroundColor DarkGray
+            Write-Host "-F" -ForegroundColor Green -NoNewline
+            Write-Host " (fixed-strings), which does not require the workaround." -ForegroundColor DarkGray
             Write-Host
             Write-Host "  EXAMPLES" -ForegroundColor Yellow
             Write-Host "    grep " -NoNewline; Write-Host '"TODO"' -ForegroundColor DarkCyan

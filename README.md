@@ -119,9 +119,9 @@ Get-Content .\app.log -Wait | grep -i "error"   # follow the file
 ### Recurse with filters
 
 ```powershell
-grep -rgrep -r "TODO"     . --include="*.md" --include="*.txt" --exclude="*.bak"
-e-dir=node_modules --exclude-dir=.git
-grep -r "TODO"     . --include="*.{md,txt}" --exclude="*.bak"
+grep -r "TODO" . --include="*.md" --include="*.txt" --exclude="*.bak"
+grep -r "TODO" --excludee-dir=node_modules --exclude-dir=.git
+grep -r "TODO" --include="*.{md,txt}" --exclude="*.bak"
 ```
 
 ### Context around matches
@@ -172,10 +172,12 @@ grep -Fi "hello world" .             # literal + case-insensitive
 
 ### Patterns starting with `-`
 
-Use `-e` so the pattern is parsed as the option's argument:
+Use `-e` so the pattern is parsed as the option's argument, or place a bare `-` before the pattern to stop option parsing (analogous to `--` in GNU `grep` — note that `grep-for-windows` uses a single `-` for this, not `--`). With `-F`, no workaround is needed.
 
 ```powershell
-grep -e "-foo" .\file                # search for the literal "-foo"
+grep -e "-RestMethod" .              # -e takes the pattern directly
+grep -r - '-RestMethod' .            # bare - stops option parsing; -RestMethod is the pattern
+grep -rF '-RestMethod' .             # -F: no workaround needed
 ```
 
 ---
@@ -356,7 +358,7 @@ session: `Import-Module grep-for-windows`.
   not help. Use `--help` (or `-?`).
 - **Patterns starting with `-`.** Use `grep -e "-foo" .\file` so the pattern is
   bound to `-e` rather than parsed as an option. PowerShell also strips bare
-  `--` before it reaches the function, so quote it (`grep "--" "-foo"`) if you
+  `--` before it reaches the function, so use `-` insted (`grep - "-foo"`) if you
   prefer the end-of-options style.
 - **Multiple file arguments.** Currently `grep` accepts one path per
   invocation. To search several files explicitly, point at their parent
