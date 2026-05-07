@@ -83,7 +83,7 @@ you're already up to date.
 ## Features
 
 - **Familiar syntax.** `grep -rni "error" .` does what you'd expect.
-- **Literal by default, regex on demand.** Pass `-e` (or `--regexp`) to switch.
+- **Regex patterns by default.** Use `-F` / `--fixed-strings` to match literal text instead of a regex. Use `-e PATTERN` (repeatable) for multiple patterns.
 - **Reads from pipes.** `Get-Content app.log | grep -i "error"` works out of the box.
 - **Recursive search** with directory and glob filters (`-r`, `--include`, `--exclude`, `--exclude-dir`).
 - **Context lines** around each match (`-A`, `-B`, `-C`).
@@ -119,9 +119,9 @@ Get-Content .\app.log -Wait | grep -i "error"   # follow the file
 ### Recurse with filters
 
 ```powershell
-grep -r "function" . --include="*.ps1"
-grep -r "import"   . --exclude-dir=node_modules --exclude-dir=.git
-grep -r "TODO"     . --include="*.md" --include="*.txt" --exclude="*.bak"
+grep -rgrep -r "TODO"     . --include="*.md" --include="*.txt" --exclude="*.bak"
+e-dir=node_modules --exclude-dir=.git
+grep -r "TODO"     . --include="*.{md,txt}" --exclude="*.bak"
 ```
 
 ### Context around matches
@@ -151,12 +151,31 @@ grep -w "grep" .\README.md           # whole-word match
 grep -o -e "[\w]+@[\w.-]+" .\file    # print only the matched substrings
 ```
 
-### Patterns starting with `-`
+### Multiple patterns with `-e`
 
-PowerShell strips bare `--`, so quote it explicitly:
+`-e PATTERN` is repeatable; matches are combined with OR.
 
 ```powershell
-grep "--" "-foo" .\file              # pattern is the literal "-foo"
+grep -e "TODO" -e "FIXME" .\notes.txt           # any line matching either
+grep -r -e "^function" -e "^class" .\src        # function OR class headers
+```
+
+### Literal (fixed-string) search with `-F`
+
+By default the pattern is a .NET regex. Use `-F` to treat it as plain text — useful when the search term contains regex metacharacters like `.`, `*`, `(`, `)`, etc.
+
+```powershell
+grep -F "1.2.3" .\CHANGELOG.md       # literal dots, not "any char"
+grep -rF "arr[0]" .                  # literal brackets
+grep -Fi "hello world" .             # literal + case-insensitive
+```
+
+### Patterns starting with `-`
+
+Use `-e` so the pattern is parsed as the option's argument:
+
+```powershell
+grep -e "-foo" .\file                # search for the literal "-foo"
 ```
 
 ---
@@ -177,9 +196,11 @@ The full option list, mirroring GNU `grep` where it makes sense.
 
 | Option | Description |
 |---|---|
-| `-e`, `--regexp` | Treat `<pattern>` as a regular expression instead of literal text. |
+| `-e PAT`, `--regexp=PAT` | Use `PAT` as a regex pattern. Repeatable: multiple `-e` patterns are combined as an OR alternation. The first positional arg becomes the path. |
+| `-F`, `--fixed-strings` | Interpret the pattern (and any `-e` patterns) as literal text — regex metacharacters are matched verbatim. |
 | `-i`, `--ignore-case` | Case-insensitive match. |
 | `-w`, `--word-regexp` | Match whole words only (wraps the pattern with `\b`). |
+| `-x`, `--line-regexp` | Match only whole lines (the pattern must match the entire line). |
 | `-v`, `--invert-match` | Print lines that do **not** match. |
 
 ### Output control
@@ -189,7 +210,10 @@ The full option list, mirroring GNU `grep` where it makes sense.
 | `-n`, `--line-number` | Prefix each match with its line number. |
 | `-c`, `--count` | Print only a count of matching lines per file. |
 | `-l`, `--files-with-matches` | Print only the names of files that contain matches. |
+| `-L`, `--files-without-match` | Print only the names of files with **no** matches. |
 | `-o`, `--only-matching` | Print only the matched portion of a line, one match per output line. |
+| `-q`, `--quiet`, `--silent` | Suppress all output; exit `0` on the first match, `1` if none. |
+| `-m NUM`, `--max-count=NUM` | Stop after `NUM` matching lines per file. |
 
 ### Context
 
@@ -198,6 +222,7 @@ The full option list, mirroring GNU `grep` where it makes sense.
 | `-A NUM`, `--after-context=NUM` | Print `NUM` lines after each match. |
 | `-B NUM`, `--before-context=NUM` | Print `NUM` lines before each match. |
 | `-C NUM`, `--context=NUM` | Print `NUM` lines of context (before and after). |
+| `-NUM` | Shortcut for `-C NUM` (e.g. `-3` prints 3 lines of context). |
 
 `-A`/`-B`/`-C` can be combined; `-A NUM` and `-B NUM` override `-C` when both are given.
 
@@ -329,9 +354,10 @@ session: `Import-Module grep-for-windows`.
 
 - **`-h` is not the help shortcut.** GNU `grep` reserves `-h` for `--no-filename`,
   not help. Use `--help` (or `-?`).
-- **Patterns starting with `-`.** PowerShell strips bare `--` from the command
-  line before reaching the function. To search for a literal `-foo`, quote the
-  end-of-options marker: `grep "--" "-foo" .\file`.
+- **Patterns starting with `-`.** Use `grep -e "-foo" .\file` so the pattern is
+  bound to `-e` rather than parsed as an option. PowerShell also strips bare
+  `--` before it reaches the function, so quote it (`grep "--" "-foo"`) if you
+  prefer the end-of-options style.
 - **Multiple file arguments.** Currently `grep` accepts one path per
   invocation. To search several files explicitly, point at their parent
   directory and use `--include=GLOB`.

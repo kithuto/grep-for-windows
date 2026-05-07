@@ -18,7 +18,7 @@
             Tags        = @('grep', 'search', 'find', 'cli', 'linux', 'unix', 'select-string')
             LicenseUri  = 'https://github.com/kithuto/grep-for-windows/blob/main/LICENSE'
             ProjectUri  = 'https://github.com/kithuto/grep-for-windows'
-            ReleaseNotes = 'Restructured as a PowerShell module. Single line in $PROFILE replaces the inline 500-line block.'
+            ReleaseNotes = 'First public release.'
         }
     }
 }

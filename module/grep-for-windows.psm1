@@ -95,16 +95,18 @@ function grep {
         $expectingPipeline = [bool]$MyInvocation.ExpectingInput
 
         $flagHelp = $false; $flagVersion = $false; $flagUpdate = $false
-        $flagRecursive = $false; $flagIgnoreCase = $false; $flagRegexp = $false
+        $flagRecursive = $false; $flagIgnoreCase = $false; $flagFixed = $false
         $flagInvert = $false; $flagCount = $false; $flagFiles = $false
+        $flagFilesNoMatch = $false; $flagQuiet = $false; $flagLineMatch = $false
         $flagWord = $false; $flagOnly = $false; $flagLineNumber = $false
-        $afterCtx = -1; $beforeCtx = -1; $ctxBoth = -1
+        $afterCtx = -1; $beforeCtx = -1; $ctxBoth = -1; $maxCount = -1
 
         $excludeDirs = [System.Collections.Generic.List[string]]::new()
         foreach ($d in (Get-GrepAlwaysExcludedDirs)) { $excludeDirs.Add($d) }
-        $include  = [System.Collections.Generic.List[string]]::new()
-        $exclude  = [System.Collections.Generic.List[string]]::new()
-        $realArgs = [System.Collections.Generic.List[string]]::new(2)
+        $include   = [System.Collections.Generic.List[string]]::new()
+        $exclude   = [System.Collections.Generic.List[string]]::new()
+        $ePatterns = [System.Collections.Generic.List[string]]::new()
+        $realArgs  = [System.Collections.Generic.List[string]]::new(2)
 
         $treatRestAsPositional = $false
         # Wrap to keep $args as an Object[] without unrolling the if-expression.
@@ -123,52 +125,70 @@ function grep {
             switch -CaseSensitive ($a) {
                 '-r' { $flagRecursive  = $true }
                 '-i' { $flagIgnoreCase = $true }
-                '-e' { $flagRegexp     = $true }
+                '-F' { $flagFixed      = $true }
+                '-e' { $needValueFor   = 'e' }
                 '-V' { $flagVersion    = $true }
                 '-v' { $flagInvert     = $true }
                 '-c' { $flagCount      = $true }
                 '-l' { $flagFiles      = $true }
+                '-L' { $flagFilesNoMatch = $true }
+                '-q' { $flagQuiet      = $true }
+                '-x' { $flagLineMatch  = $true }
                 '-w' { $flagWord       = $true }
                 '-o' { $flagOnly       = $true }
                 '-n' { $flagLineNumber = $true }
                 '-A' { $needValueFor = 'A' }
                 '-B' { $needValueFor = 'B' }
                 '-C' { $needValueFor = 'C' }
-                '--help'                { $flagHelp       = $true }
-                '--version'             { $flagVersion    = $true }
-                '--update'              { $flagUpdate     = $true }
-                '--recursive'           { $flagRecursive  = $true }
-                '--ignore-case'         { $flagIgnoreCase = $true }
-                '--regexp'              { $flagRegexp     = $true }
-                '--invert-match'        { $flagInvert     = $true }
-                '--count'               { $flagCount      = $true }
-                '--files-with-matches'  { $flagFiles      = $true }
-                '--word-regexp'         { $flagWord       = $true }
-                '--only-matching'       { $flagOnly       = $true }
-                '--line-number'         { $flagLineNumber = $true }
+                '-m' { $needValueFor = 'm' }
+                '--help'                  { $flagHelp         = $true }
+                '--version'               { $flagVersion      = $true }
+                '--update'                { $flagUpdate       = $true }
+                '--recursive'             { $flagRecursive    = $true }
+                '--ignore-case'           { $flagIgnoreCase   = $true }
+                '--fixed-strings'         { $flagFixed        = $true }
+                '--invert-match'          { $flagInvert       = $true }
+                '--count'                 { $flagCount        = $true }
+                '--files-with-matches'    { $flagFiles        = $true }
+                '--files-without-match'   { $flagFilesNoMatch = $true }
+                '--quiet'                 { $flagQuiet        = $true }
+                '--silent'                { $flagQuiet        = $true }
+                '--line-regexp'           { $flagLineMatch    = $true }
+                '--word-regexp'           { $flagWord         = $true }
+                '--only-matching'         { $flagOnly         = $true }
+                '--line-number'           { $flagLineNumber   = $true }
                 default {
-                    # Combined short forms with embedded numeric value: -A3, -B5, -C2.
+                    # Combined short forms with embedded numeric value: -A3, -B5, -C2, -m10.
                     if     ($a -cmatch '^-A(\d+)$') { $afterCtx  = [int]$Matches[1] }
                     elseif ($a -cmatch '^-B(\d+)$') { $beforeCtx = [int]$Matches[1] }
                     elseif ($a -cmatch '^-C(\d+)$') { $ctxBoth   = [int]$Matches[1] }
-                    # Bundled boolean short flags: -rn, -ri, -rni, -cl, ... (each
-                    # char is a separate flag). Value-taking flags like -A/-B/-C
-                    # are NOT bundled-compatible here; pass them as separate args.
-                    elseif ($a -cmatch '^-([rieVvclwon]+)$') {
+                    elseif ($a -cmatch '^-m(\d+)$') { $maxCount  = [int]$Matches[1] }
+                    # GNU shortcut: -NUM is the same as -C NUM.
+                    elseif ($a -cmatch '^-(\d+)$')  { $ctxBoth   = [int]$Matches[1] }
+                    # -e PATTERN with the pattern attached (GNU: '-ePATTERN' form).
+                    elseif ($a -cmatch '^-e(.+)$')  { $ePatterns.Add($Matches[1]) }
+                    # Bundled boolean short flags, optionally ending with 'e' which
+                    # consumes the next argv as a pattern (e.g. -re PATTERN).
+                    # Value-taking flags -A/-B/-C/-m are NOT bundle-compatible.
+                    elseif ($a -cmatch '^-([rivVclLqxwonF]+)(e?)$') {
                         foreach ($ch in $Matches[1].ToCharArray()) {
                             switch -CaseSensitive ([string]$ch) {
-                                'r' { $flagRecursive  = $true }
-                                'i' { $flagIgnoreCase = $true }
-                                'e' { $flagRegexp     = $true }
-                                'V' { $flagVersion    = $true }
-                                'v' { $flagInvert     = $true }
-                                'c' { $flagCount      = $true }
-                                'l' { $flagFiles      = $true }
-                                'w' { $flagWord       = $true }
-                                'o' { $flagOnly       = $true }
-                                'n' { $flagLineNumber = $true }
+                                'r' { $flagRecursive    = $true }
+                                'i' { $flagIgnoreCase   = $true }
+                                'F' { $flagFixed        = $true }
+                                'V' { $flagVersion      = $true }
+                                'v' { $flagInvert       = $true }
+                                'c' { $flagCount        = $true }
+                                'l' { $flagFiles        = $true }
+                                'L' { $flagFilesNoMatch = $true }
+                                'q' { $flagQuiet        = $true }
+                                'x' { $flagLineMatch    = $true }
+                                'w' { $flagWord         = $true }
+                                'o' { $flagOnly         = $true }
+                                'n' { $flagLineNumber   = $true }
                             }
                         }
+                        if ($Matches[2] -eq 'e') { $needValueFor = 'e' }
                     }
                     elseif ($a -like '--exclude-dir=*') {
                         $v = $a.Substring(14).Trim()
@@ -200,6 +220,17 @@ function grep {
                         if ($v -match '^\d+$') { $ctxBoth = [int]$v }
                         else                   { $parseError = "invalid argument: '$a'. Use --context=NUM" }
                     }
+                    elseif ($a -like '--max-count=*') {
+                        $v = $a.Substring(12).Trim()
+                        if ($v -match '^\d+$') { $maxCount = [int]$v }
+                        else                   { $parseError = "invalid argument: '$a'. Use --max-count=NUM" }
+                    }
+                    elseif ($a -like '--regexp=*') {
+                        $ePatterns.Add($a.Substring(9))
+                    }
+                    elseif ($a -ceq '--regexp') {
+                        $parseError = "option '--regexp' requires a value. Use --regexp=PATTERN."
+                    }
                     elseif ($a.Length -gt 1 -and $a[0] -eq '-') {
                         $parseError = "unrecognized option '$a'. Run 'grep --help' for help."
                     }
@@ -210,15 +241,25 @@ function grep {
             if ($parseError) { break }
 
             if ($needValueFor) {
-                if ($idx + 1 -ge $argsList.Count -or $argsList[$idx + 1] -notmatch '^\d+$') {
-                    $parseError = "option '-$needValueFor' requires a non-negative integer argument."
+                if ($idx + 1 -ge $argsList.Count) {
+                    $parseError = "option '-$needValueFor' requires an argument."
                     break
                 }
-                $next = [int]$argsList[$idx + 1]
-                switch ($needValueFor) {
-                    'A' { $afterCtx  = $next }
-                    'B' { $beforeCtx = $next }
-                    'C' { $ctxBoth   = $next }
+                $rawNext = [string]$argsList[$idx + 1]
+                if ($needValueFor -eq 'e') {
+                    # GNU '-e PATTERN' takes the next argv verbatim, even if it starts with '-'.
+                    $ePatterns.Add($rawNext)
+                } elseif ($rawNext -notmatch '^\d+$') {
+                    $parseError = "option '-$needValueFor' requires a non-negative integer argument."
+                    break
+                } else {
+                    $next = [int]$rawNext
+                    switch ($needValueFor) {
+                        'A' { $afterCtx  = $next }
+                        'B' { $beforeCtx = $next }
+                        'C' { $ctxBoth   = $next }
+                        'm' { $maxCount  = $next }
+                    }
                 }
                 $idx++
             }
@@ -253,21 +294,28 @@ function grep {
             Write-GrepHelpRow ''   '--update'  'Checks for a newer version on GitHub and updates if found.'
             Write-Host
             Write-Host "  PATTERN SELECTION" -ForegroundColor Yellow
-            Write-GrepHelpRow '-e' '--regexp'       'Interpret pattern as a regular expression.'
-            Write-GrepHelpRow '-i' '--ignore-case'  'Case-insensitive match.'
-            Write-GrepHelpRow '-w' '--word-regexp'  'Match only whole words.'
-            Write-GrepHelpRow '-v' '--invert-match' 'Print lines that do NOT match.'
+            Write-Host "    Patterns are regular expressions (.NET regex)." -ForegroundColor DarkGray
+            Write-GrepHelpRow '-e PAT' '--regexp=PAT'      'Add PAT as a pattern. Repeatable; combined as OR.'
+            Write-GrepHelpRow '-F'     '--fixed-strings'   'Interpret pattern as literal text (not a regex).'
+            Write-GrepHelpRow '-i'     '--ignore-case'     'Case-insensitive match.'
+            Write-GrepHelpRow '-w'     '--word-regexp'   'Match only whole words.'
+            Write-GrepHelpRow '-x'     '--line-regexp'   'Match only whole lines.'
+            Write-GrepHelpRow '-v'     '--invert-match'  'Print lines that do NOT match.'
             Write-Host
             Write-Host "  OUTPUT CONTROL" -ForegroundColor Yellow
-            Write-GrepHelpRow '-n' '--line-number'        'Prefix each match with its line number.'
-            Write-GrepHelpRow '-c' '--count'              'Print only a count of matching lines per file.'
-            Write-GrepHelpRow '-l' '--files-with-matches' 'Print only file names that contain matches.'
-            Write-GrepHelpRow '-o' '--only-matching'      'Print only the matched parts of a line.'
+            Write-GrepHelpRow '-n'     '--line-number'           'Prefix each match with its line number.'
+            Write-GrepHelpRow '-c'     '--count'                 'Print only a count of matching lines per file.'
+            Write-GrepHelpRow '-l'     '--files-with-matches'    'Print only file names that contain matches.'
+            Write-GrepHelpRow '-L'     '--files-without-match'   'Print only file names with no matches.'
+            Write-GrepHelpRow '-o'     '--only-matching'         'Print only the matched parts of a line.'
+            Write-GrepHelpRow '-q'     '--quiet'                 'Suppress all output. Same as --silent.'
+            Write-GrepHelpRow '-m NUM' '--max-count=NUM'         'Stop after NUM matching lines per file.'
             Write-Host
             Write-Host "  CONTEXT CONTROL" -ForegroundColor Yellow
             Write-GrepHelpRow '-A NUM' '--after-context=NUM'  'Print NUM lines after each match.'
             Write-GrepHelpRow '-B NUM' '--before-context=NUM' 'Print NUM lines before each match.'
             Write-GrepHelpRow '-C NUM' '--context=NUM'        'Print NUM lines of context (before and after).'
+            Write-GrepHelpRow ''       '-NUM'                 'Same as -C NUM (e.g. -3 prints 3 lines of context).'
             Write-Host
             Write-Host "  FILE TRAVERSAL" -ForegroundColor Yellow
             Write-GrepHelpRow '-r' '--recursive'        'Recurse into subdirectories.'
@@ -313,27 +361,40 @@ function grep {
             return
         }
 
-        # Resolve positional args.
-        $pathExplicit = $realArgs.Count -ge 2
-        $Pattern = if ($realArgs.Count -ge 1) { $realArgs[0] } else { '' }
-        $Path    = if ($pathExplicit)        { $realArgs[1] } else { '.' }
-        if ($realArgs.Count -gt 2) {
-            Write-Host "grep: too many positional arguments. Run 'grep --help' for help." -ForegroundColor Red
-            $global:LASTEXITCODE = 2; return
-        }
-        if (-not $Pattern) {
-            Write-Host "grep: a pattern is required. Run 'grep --help' for help." -ForegroundColor Red
-            $global:LASTEXITCODE = 2; return
+        # Resolve positional args. With one or more -e PATTERN, no positional
+        # pattern is taken: the first positional is the path.
+        if ($ePatterns.Count -gt 0) {
+            if ($realArgs.Count -gt 1) {
+                Write-Host "grep: too many positional arguments. Run 'grep --help' for help." -ForegroundColor Red
+                $global:LASTEXITCODE = 2; return
+            }
+            $Pattern      = ''
+            $Path         = if ($realArgs.Count -ge 1) { $realArgs[0] } else { '.' }
+            $pathExplicit = $realArgs.Count -ge 1
+        } else {
+            if ($realArgs.Count -lt 1) {
+                Write-Host "grep: a pattern is required. Run 'grep --help' for help." -ForegroundColor Red
+                $global:LASTEXITCODE = 2; return
+            }
+            if ($realArgs.Count -gt 2) {
+                Write-Host "grep: too many positional arguments. Run 'grep --help' for help." -ForegroundColor Red
+                $global:LASTEXITCODE = 2; return
+            }
+            $Pattern      = $realArgs[0]
+            $Path         = if ($realArgs.Count -ge 2) { $realArgs[1] } else { '.' }
+            $pathExplicit = $realArgs.Count -ge 2
         }
 
-        $caseSensitive = -not $flagIgnoreCase
-        $recurse       = $flagRecursive
-        $useRegex      = $flagRegexp
-        $invertMatch   = $flagInvert
-        $countOnly     = $flagCount
-        $filesOnly     = $flagFiles
-        $wordMatch     = $flagWord
-        $onlyMatching  = $flagOnly
+        $caseSensitive  = -not $flagIgnoreCase
+        $recurse        = $flagRecursive
+        $invertMatch    = $flagInvert
+        $countOnly      = $flagCount
+        $filesOnly      = $flagFiles
+        $filesNoMatch   = $flagFilesNoMatch
+        $quietMode      = $flagQuiet
+        $lineMatch      = $flagLineMatch
+        $wordMatch      = $flagWord
+        $onlyMatching   = $flagOnly
 
         # -C is the default for both -A and -B; explicit -A / -B win.
         if ($ctxBoth -ge 0) {
@@ -344,10 +405,14 @@ function grep {
         if ($beforeCtx -lt 0) { $beforeCtx = 0 }
 
         # Mutually exclusive combinations, mirroring GNU grep:
-        # -l wins over -c; -v overrides -o; -c/-l suppress context output.
+        # -q wins over all output flags; -L wins over -l/-c; -l wins over -c;
+        # -x wins over -w; -v overrides -o; counts/lists suppress context.
+        if ($quietMode) { $countOnly = $false; $filesOnly = $false; $filesNoMatch = $false; $onlyMatching = $false }
+        if ($filesNoMatch)             { $filesOnly = $false; $countOnly = $false }
         if ($filesOnly)                { $countOnly = $false }
+        if ($lineMatch)                { $wordMatch = $false }
         if ($invertMatch)              { $onlyMatching = $false }
-        if ($countOnly -or $filesOnly) { $afterCtx = 0; $beforeCtx = 0 }
+        if ($countOnly -or $filesOnly -or $filesNoMatch) { $afterCtx = 0; $beforeCtx = 0 }
 
         # Stdin mode: pipeline input is used unless an explicit path was given;
         # '-' as path always means stdin.
@@ -367,17 +432,27 @@ function grep {
         $showFilename   = (-not $isStdinMode) -and (Test-Path -LiteralPath $Path -PathType Container)
         $showLineNumber = $flagLineNumber
 
-        # Build the search regex. -w wraps with \b; literal mode escapes first.
+        # Build the search regex. -F escapes patterns as literals; -w wraps with \b.
         # Compiled flag amortises the per-line .Matches() call when there are many hits.
         $regexOptions = [System.Text.RegularExpressions.RegexOptions]::Compiled
         if (-not $caseSensitive) { $regexOptions = $regexOptions -bor [System.Text.RegularExpressions.RegexOptions]::IgnoreCase }
-        $highlightSource = if ($useRegex) { $Pattern } else { [regex]::Escape($Pattern) }
-        if ($wordMatch) { $highlightSource = "\b(?:$highlightSource)\b" }
+        # Patterns are .NET regex. Multiple -e patterns are unioned with OR.
+        # -F escapes each pattern so it is matched literally.
+        if ($ePatterns.Count -gt 0) {
+            $highlightSource = ($ePatterns | ForEach-Object {
+                if ($flagFixed) { [regex]::Escape($_) } else { "(?:$_)" }
+            }) -join '|'
+        } else {
+            $highlightSource = if ($flagFixed) { [regex]::Escape($Pattern) } else { $Pattern }
+        }
+        if     ($lineMatch) { $highlightSource = "\A(?:$highlightSource)\z" }
+        elseif ($wordMatch) { $highlightSource = "\b(?:$highlightSource)\b" }
 
         try {
             $highlightRegex = [regex]::new($highlightSource, $regexOptions)
         } catch {
-            Write-Host "grep: invalid regex pattern '$Pattern'." -ForegroundColor Red
+            $shown = if ($ePatterns.Count -gt 0) { ($ePatterns -join ', ') } else { $Pattern }
+            Write-Host "grep: invalid regex pattern '$shown'." -ForegroundColor Red
             $global:LASTEXITCODE = 2; return
         }
 
@@ -388,18 +463,11 @@ function grep {
             $excludeRegex = [regex]::new("\\($alternation)\\", 'IgnoreCase')
         }
 
-        # Pure literal patterns use Select-String -SimpleMatch (faster, no regex parse).
-        $selectStringArgs = @{ CaseSensitive = $caseSensitive }
-        if ($useRegex -or $wordMatch) {
-            $selectStringArgs['Pattern'] = $highlightSource
-        } else {
-            $selectStringArgs['Pattern']     = $Pattern
-            $selectStringArgs['SimpleMatch'] = $true
-        }
+        $selectStringArgs = @{ CaseSensitive = $caseSensitive; Pattern = $highlightSource }
         if ($invertMatch)                              { $selectStringArgs['NotMatch'] = $true }
         if ($beforeCtx -gt 0 -or $afterCtx -gt 0)      { $selectStringArgs['Context']  = @($beforeCtx, $afterCtx) }
-        # -List makes Select-String stop at the first match per file.
-        if ($filesOnly)                                { $selectStringArgs['List']     = $true }
+        # -List makes Select-String stop at the first match per file (used by -l, -L, -q).
+        if ($filesOnly -or $filesNoMatch -or $quietMode) { $selectStringArgs['List']   = $true }
 
         # Streaming: matches flow Select-String -> ForEach-Object so each hit prints
         # the moment it is found. State is held in reference types so mutations
@@ -409,22 +477,20 @@ function grep {
         $state        = @{ Total = 0 }
         $seenPaths    = [System.Collections.Generic.HashSet[string]]::new()
         $counts       = [ordered]@{}
+        $shownPerFile = @{}  # for -m: matches emitted per file
         $lastPrinted  = @{}  # per-file dedupe for context line numbers
         $hasContext   = $beforeCtx -gt 0 -or $afterCtx -gt 0
 
-        & {
-            if ($isStdinMode) {
-                if ($stdinLines.Count -gt 0) { $stdinLines | Select-String @selectStringArgs }
-                return
-            }
+        # Reusable file enumeration with --include / --exclude / --exclude-dir filters.
+        $produceFiles = {
             $files = Get-ChildItem -Path $Path -Recurse:$recurse -File -ErrorAction SilentlyContinue
             if ($excludeRegex -or $include.Count -gt 0 -or $exclude.Count -gt 0) {
                 $files = $files | Where-Object {
                     if ($excludeRegex -and $excludeRegex.IsMatch($_.FullName)) { return $false }
                     if ($include.Count -gt 0) {
-                        $matched = $false
-                        foreach ($g in $include) { if ($_.Name -like $g) { $matched = $true; break } }
-                        if (-not $matched) { return $false }
+                        $ok = $false
+                        foreach ($g in $include) { if ($_.Name -like $g) { $ok = $true; break } }
+                        if (-not $ok) { return $false }
                     }
                     if ($exclude.Count -gt 0) {
                         foreach ($g in $exclude) { if ($_.Name -like $g) { return $false } }
@@ -432,10 +498,61 @@ function grep {
                     $true
                 }
             }
-            $files | Select-String @selectStringArgs
-        } | ForEach-Object {
-            $state.Total++
+            $files
+        }
+
+        # Match producer shared by -q and default rendering.
+        $produceMatches = {
+            if ($isStdinMode) {
+                if ($stdinLines.Count -gt 0) { $stdinLines | Select-String @selectStringArgs }
+                return
+            }
+            & $produceFiles | Select-String @selectStringArgs
+        }
+
+        # -q: stop at first match, print nothing. Select-Object -First 1 closes
+        # the upstream pipeline so Select-String can short-circuit on the first hit.
+        if ($quietMode) {
+            if (-not (& $produceMatches | Select-Object -First 1)) { $global:LASTEXITCODE = 1 }
+            return
+        }
+
+        # -L: print only paths with NO match. Needs the file list materialised
+        # so we can subtract the matched set from it.
+        if ($filesNoMatch) {
+            if ($isStdinMode) {
+                $hit = $false
+                if ($stdinLines.Count -gt 0) {
+                    $hit = [bool]($stdinLines | Select-String @selectStringArgs | Select-Object -First 1)
+                }
+                if (-not $hit) { Write-Host '(standard input)' -ForegroundColor Magenta; $state.Total++ }
+            } else {
+                $allFiles = @(& $produceFiles)
+                $matchedSet = [System.Collections.Generic.HashSet[string]]::new()
+                $allFiles | Select-String @selectStringArgs | ForEach-Object { [void]$matchedSet.Add($_.Path) }
+                foreach ($f in $allFiles) {
+                    if (-not $matchedSet.Contains($f.FullName)) {
+                        Write-Host $f.FullName -ForegroundColor Magenta
+                        $state.Total++
+                    }
+                }
+            }
+            if ($state.Total -eq 0) { $global:LASTEXITCODE = 1 }
+            return
+        }
+
+        & $produceMatches | ForEach-Object {
             $mi = $_
+
+            # -m per-file cap: skip emission once a file has reached its quota.
+            if ($maxCount -ge 0) {
+                $mkey = if ($isStdinMode) { '<stdin>' } else { $mi.Path }
+                $cur  = if ($shownPerFile.ContainsKey($mkey)) { $shownPerFile[$mkey] } else { 0 }
+                if ($cur -ge $maxCount) { return }
+                $shownPerFile[$mkey] = $cur + 1
+            }
+
+            $state.Total++
             $effPath = if ($showFilename) { $mi.Path } else { '' }
             $effLn   = if ($showLineNumber) { $mi.LineNumber } else { 0 }
 
