@@ -151,6 +151,14 @@ function grep {
         Get-Content .\app.log | grep -i "error"
             Filter piped input.
 
+.EXAMPLE
+    grep -r -i "error" C:\projects\myapp
+    Recursively search a directory, case-insensitive.
+
+.EXAMPLE
+    Get-Content .\app.log | grep -i "error"
+    Filter piped input.
+
 .LINK
     https://github.com/kithuto/grep-for-windows
 #>
