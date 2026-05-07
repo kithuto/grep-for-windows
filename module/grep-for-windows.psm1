@@ -231,7 +231,7 @@ function grep {
                     elseif ($a -ceq '--regexp') {
                         $parseError = "option '--regexp' requires a value. Use --regexp=PATTERN."
                     }
-                    elseif ($a.Length -gt 1 -and $a[0] -eq '-') {
+                    elseif ($a.Length -gt 1 -and $a[0] -eq '-' -and -not $flagFixed) {
                         $parseError = "unrecognized option '$a'. Run 'grep --help' for help."
                     }
                     else { $realArgs.Add($a) }
