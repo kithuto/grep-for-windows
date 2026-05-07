@@ -83,6 +83,77 @@ function Get-GrepAlwaysExcludedDirs {
 # parameter binder cannot collapse case-distinct flags such as -v vs -V or -c vs -C.
 # All command-line tokens land in $args and are parsed manually.
 function grep {
+<#
+.SYNOPSIS
+    Linux-style grep for PowerShell.
+
+.DESCRIPTION
+    Searches files, directories, or piped input for lines matching a pattern.
+    Patterns are .NET regular expressions by default. Use -F for literal (fixed-string) matching.
+    Supports recursive search, context lines, colored output, and most common GNU grep flags.
+
+    Accepts the same flags and positional arguments as GNU grep.
+
+    USAGE
+        grep [options] <pattern> [path] [filter options...]
+        cmd | grep [options] <pattern>
+
+    PATTERN SELECTION
+        -e PAT, --regexp=PAT      Add PAT as a pattern. Repeatable; combined as OR.
+        -F,     --fixed-strings   Interpret pattern as literal text (not a regex).
+        -i,     --ignore-case     Case-insensitive match.
+        -w,     --word-regexp     Match only whole words.
+        -x,     --line-regexp     Match only whole lines.
+        -v,     --invert-match    Print lines that do NOT match.
+
+    OUTPUT CONTROL
+        -n,     --line-number           Prefix each match with its line number.
+        -c,     --count                 Print only a count of matching lines per file.
+        -l,     --files-with-matches    Print only file names that contain matches.
+        -L,     --files-without-match   Print only file names with no matches.
+        -o,     --only-matching         Print only the matched parts of a line.
+        -q,     --quiet                 Suppress all output. Same as --silent.
+        -m NUM, --max-count=NUM         Stop after NUM matching lines per file.
+
+    CONTEXT CONTROL
+        -A NUM, --after-context=NUM     Print NUM lines after each match.
+        -B NUM, --before-context=NUM    Print NUM lines before each match.
+        -C NUM, --context=NUM           Print NUM lines of context (before and after).
+                -NUM                    Same as -C NUM (e.g. -3 prints 3 lines of context).
+
+    FILE TRAVERSAL
+        -r,     --recursive         Recurse into subdirectories.
+                --include=GLOB      Search only files whose name matches GLOB. Repeatable.
+                --exclude=GLOB      Skip files whose name matches GLOB. Repeatable.
+                --exclude-dir=NAME  Skip any directory named NAME. Repeatable.
+
+    GENERAL
+                --help              Shows detailed help and exits.
+        -V,     --version           Shows the installed version and exits.
+                --update            Checks for a newer version on GitHub and updates if found.
+
+    EXAMPLES
+        grep "TODO" .
+            Search the current directory for lines containing TODO.
+
+        grep -r -i "error" C:\projects\myapp
+            Recursively search a directory, case-insensitive.
+
+        grep -r -e "[\w.+-]+@[\w-]+\.[\w.-]+" .
+            Search for e-mail addresses using a regex pattern.
+
+        grep -r -l "function" . --include="*.ps1"
+            List PowerShell files that contain the word function.
+
+        grep -A 2 -B 2 "TODO" .\notes.txt
+            Show 2 lines of context around each match.
+
+        Get-Content .\app.log | grep -i "error"
+            Filter piped input.
+
+.LINK
+    https://github.com/kithuto/grep-for-windows
+#>
     begin {
         $stdinLines = [System.Collections.Generic.List[string]]::new()
     }
