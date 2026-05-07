@@ -120,7 +120,7 @@ Get-Content .\app.log -Wait | grep -i "error"   # follow the file
 
 ```powershell
 grep -r "TODO" . --include="*.md" --include="*.txt" --exclude="*.bak"
-grep -r "TODO" --excludee-dir=node_modules --exclude-dir=.git
+grep -r "TODO" --exclude-dir=node_modules --exclude-dir=.git
 grep -r "TODO" --include="*.{md,txt}" --exclude="*.bak"
 ```
 
@@ -215,6 +215,7 @@ The full option list, mirroring GNU `grep` where it makes sense.
 | `-L`, `--files-without-match` | Print only the names of files with **no** matches. |
 | `-o`, `--only-matching` | Print only the matched portion of a line, one match per output line. |
 | `-q`, `--quiet`, `--silent` | Suppress all output; exit `0` on the first match, `1` if none. |
+| `-s`, `--no-messages` | Suppress error messages about unreadable files (e.g. `Permission denied`). The exit code still reflects errors (`2`), matching GNU `grep`. |
 | `-m NUM`, `--max-count=NUM` | Stop after `NUM` matching lines per file. |
 
 ### Context
@@ -263,6 +264,9 @@ prints line numbers only when you ask for them with `-n`.
 
 - File paths are printed in **magenta**, matches highlighted in **red**.
 - Context lines (`-A` / `-B` / `-C`) use a `-` separator instead of `:`.
+- I/O errors (unreadable file, permission denied, etc.) are reported in
+  GNU style — e.g. `grep: path\to\file: Permission denied` — and skipped over
+  so the search continues. Use `-s` to silence them.
 
 Exit codes match GNU `grep`: `0` (match found), `1` (no match), `2` (error).
 

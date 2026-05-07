@@ -2,6 +2,19 @@
 # Linux-style grep for PowerShell. Source: https://github.com/kithuto/grep-for-windows
 # Public surface: grep, Uninstall-GrepForWindows. All other functions are private helpers.
 
+# ANSI escape sequences for colored output. We build the whole line in a
+# StringBuilder and write it once with [Console]::Out.WriteLine, which is
+# several times faster than the multi-call Write-Host pattern. We keep a
+# Write-Host fallback for hosts that don't speak VT100 (legacy PS5 console)
+# or when output is being redirected to a file/pipe (no escape codes there).
+$script:AnsiMagenta = "$([char]27)[35m"
+$script:AnsiRed     = "$([char]27)[31m"
+$script:AnsiReset   = "$([char]27)[0m"
+$script:UseAnsi     = $false
+try {
+    $script:UseAnsi = $Host.UI.SupportsVirtualTerminal -and -not [System.Console]::IsOutputRedirected
+} catch { $script:UseAnsi = $false }
+
 # Renders a matching line: [path:][lineno: ]line, with hits highlighted in red.
 # Empty Path / LineNumber<=0 skips the corresponding prefix.
 function Write-GrepColoredLine {
@@ -12,6 +25,28 @@ function Write-GrepColoredLine {
         [Parameter(Mandatory)] [regex]$HighlightRegex
     )
 
+    if ($script:UseAnsi) {
+        $sb = [System.Text.StringBuilder]::new(64 + $Line.Length)
+        if ($Path)             { [void]$sb.Append($script:AnsiMagenta).Append($Path).Append(':').Append($script:AnsiReset) }
+        if ($LineNumber -gt 0) { [void]$sb.Append($LineNumber).Append(': ') }
+
+        $hits = $HighlightRegex.Matches($Line)
+        if ($hits.Count -eq 0 -or $hits[0].Length -eq 0) {
+            [void]$sb.Append($Line)
+        } else {
+            $cursor = 0
+            foreach ($m in $hits) {
+                if ($m.Index -gt $cursor) { [void]$sb.Append($Line, $cursor, $m.Index - $cursor) }
+                [void]$sb.Append($script:AnsiRed).Append($m.Value).Append($script:AnsiReset)
+                $cursor = $m.Index + $m.Length
+            }
+            if ($cursor -lt $Line.Length) { [void]$sb.Append($Line, $cursor, $Line.Length - $cursor) }
+        }
+        [Console]::Out.WriteLine($sb.ToString())
+        return
+    }
+
+    # Legacy fallback: multiple Write-Host calls.
     if ($Path)             { Write-Host "${Path}:" -ForegroundColor Magenta -NoNewline }
     if ($LineNumber -gt 0) { Write-Host "${LineNumber}: " -NoNewline }
 
@@ -44,6 +79,14 @@ function Write-GrepContextLine {
         [int]$LineNumber = 0,
         [Parameter(Mandatory)] [AllowEmptyString()] [string]$Line
     )
+    if ($script:UseAnsi) {
+        $sb = [System.Text.StringBuilder]::new(32 + $Line.Length)
+        if ($Path)             { [void]$sb.Append($script:AnsiMagenta).Append($Path).Append('-').Append($script:AnsiReset) }
+        if ($LineNumber -gt 0) { [void]$sb.Append($LineNumber).Append('- ') }
+        [void]$sb.Append($Line)
+        [Console]::Out.WriteLine($sb.ToString())
+        return
+    }
     if ($Path)             { Write-Host "${Path}-" -ForegroundColor Magenta -NoNewline }
     if ($LineNumber -gt 0) { Write-Host "${LineNumber}- " -NoNewline }
     Write-Host $Line
@@ -66,6 +109,42 @@ function Write-GrepHelpRow {
     # 34 = width of the longest row ('-B NUM, --before-context=NUM' = 32) + 2 spaces.
     Write-Host (' ' * [Math]::Max(2, 34 - $col)) -NoNewline
     Write-Host $Desc
+}
+
+# Renders an ErrorRecord as a GNU grep-style line: "grep: <path>: <reason>".
+# Maps the common .NET I/O exceptions to grep's wording; falls back to the
+# underlying exception message for anything else.
+function Write-GrepError {
+    param([Parameter(Mandatory)] [System.Management.Automation.ErrorRecord]$ErrorRecord)
+
+    # Path resolution. Get-ChildItem-style errors carry the path on TargetObject;
+    # Select-String wraps file I/O errors in an ArgumentException whose message
+    # quotes the offending path, leaving TargetObject empty — so fall back to a
+    # regex over the message text in that case.
+    $target = $ErrorRecord.TargetObject
+    $path = if     ($target -is [System.IO.FileSystemInfo]) { $target.FullName }
+            elseif ($target -is [string])                   { $target }
+            else                                            { '' }
+    if (-not $path -and $ErrorRecord.CategoryInfo.TargetName) {
+        $path = $ErrorRecord.CategoryInfo.TargetName
+    }
+    if (-not $path) {
+        $m = [regex]::Match($ErrorRecord.Exception.Message, "'([^']+)'")
+        if ($m.Success) { $path = $m.Groups[1].Value }
+    }
+
+    $ex = $ErrorRecord.Exception
+    while ($ex.InnerException) { $ex = $ex.InnerException }
+    $reason = switch ($ex.GetType().Name) {
+        'UnauthorizedAccessException' { 'Permission denied' }
+        'FileNotFoundException'       { 'No such file or directory' }
+        'DirectoryNotFoundException'  { 'No such file or directory' }
+        'PathTooLongException'        { 'File name too long' }
+        default                       { $ex.Message }
+    }
+
+    if ($path) { Write-Host "grep: ${path}: $reason" -ForegroundColor Red }
+    else       { Write-Host "grep: $reason"          -ForegroundColor Red }
 }
 
 # Returns folder names to always exclude. Customise by setting
@@ -113,6 +192,7 @@ function grep {
         -L,     --files-without-match   Print only file names with no matches.
         -o,     --only-matching         Print only the matched parts of a line.
         -q,     --quiet                 Suppress all output. Same as --silent.
+        -s,     --no-messages           Suppress error messages about unreadable files.
         -m NUM, --max-count=NUM         Stop after NUM matching lines per file.
 
     CONTEXT CONTROL
@@ -178,6 +258,7 @@ function grep {
         $flagInvert = $false; $flagCount = $false; $flagFiles = $false
         $flagFilesNoMatch = $false; $flagQuiet = $false; $flagLineMatch = $false
         $flagWord = $false; $flagOnly = $false; $flagLineNumber = $false
+        $flagNoMessages = $false
         $afterCtx = -1; $beforeCtx = -1; $ctxBoth = -1; $maxCount = -1
 
         $excludeDirs = [System.Collections.Generic.List[string]]::new()
@@ -214,6 +295,7 @@ function grep {
                 '-l' { $flagFiles      = $true }
                 '-L' { $flagFilesNoMatch = $true }
                 '-q' { $flagQuiet      = $true }
+                '-s' { $flagNoMessages = $true }
                 '-x' { $flagLineMatch  = $true }
                 '-w' { $flagWord       = $true }
                 '-o' { $flagOnly       = $true }
@@ -234,6 +316,7 @@ function grep {
                 '--files-without-match'   { $flagFilesNoMatch = $true }
                 '--quiet'                 { $flagQuiet        = $true }
                 '--silent'                { $flagQuiet        = $true }
+                '--no-messages'           { $flagNoMessages   = $true }
                 '--line-regexp'           { $flagLineMatch    = $true }
                 '--word-regexp'           { $flagWord         = $true }
                 '--only-matching'         { $flagOnly         = $true }
@@ -252,7 +335,7 @@ function grep {
                     # Bundled boolean short flags, optionally ending with 'e' which
                     # consumes the next argv as a pattern (e.g. -re PATTERN).
                     # Value-taking flags -A/-B/-C/-m are NOT bundle-compatible.
-                    elseif ($a -cmatch '^-([rivVclLqxwonF]+)(e?)$') {
+                    elseif ($a -cmatch '^-([rivVclLqsxwonF]+)(e?)$') {
                         foreach ($ch in $Matches[1].ToCharArray()) {
                             switch -CaseSensitive ([string]$ch) {
                                 'r' { $flagRecursive    = $true }
@@ -264,6 +347,7 @@ function grep {
                                 'l' { $flagFiles        = $true }
                                 'L' { $flagFilesNoMatch = $true }
                                 'q' { $flagQuiet        = $true }
+                                's' { $flagNoMessages   = $true }
                                 'x' { $flagLineMatch    = $true }
                                 'w' { $flagWord         = $true }
                                 'o' { $flagOnly         = $true }
@@ -391,6 +475,7 @@ function grep {
             Write-GrepHelpRow '-L'     '--files-without-match'   'Print only file names with no matches.'
             Write-GrepHelpRow '-o'     '--only-matching'         'Print only the matched parts of a line.'
             Write-GrepHelpRow '-q'     '--quiet'                 'Suppress all output. Same as --silent.'
+            Write-GrepHelpRow '-s'     '--no-messages'           'Suppress error messages about unreadable files.'
             Write-GrepHelpRow '-m NUM' '--max-count=NUM'         'Stop after NUM matching lines per file.'
             Write-Host
             Write-Host "  CONTEXT CONTROL" -ForegroundColor Yellow
@@ -484,6 +569,7 @@ function grep {
         $filesOnly      = $flagFiles
         $filesNoMatch   = $flagFilesNoMatch
         $quietMode      = $flagQuiet
+        $noMessages     = $flagNoMessages
         $lineMatch      = $flagLineMatch
         $wordMatch      = $flagWord
         $onlyMatching   = $flagOnly
@@ -514,7 +600,9 @@ function grep {
             $global:LASTEXITCODE = 2; return
         }
         if (-not $isStdinMode -and -not (Test-Path -LiteralPath $Path)) {
-            Write-Host "grep: '$Path': No such file or directory" -ForegroundColor Red
+            if (-not $noMessages) {
+                Write-Host "grep: '$Path': No such file or directory" -ForegroundColor Red
+            }
             $global:LASTEXITCODE = 2; return
         }
 
@@ -548,12 +636,12 @@ function grep {
             $global:LASTEXITCODE = 2; return
         }
 
-        # Combined regex matching \name\ in any path component (case-insensitive).
-        $excludeRegex = $null
-        if ($excludeDirs.Count -gt 0) {
-            $alternation = ($excludeDirs | ForEach-Object { [regex]::Escape($_) }) -join '|'
-            $excludeRegex = [regex]::new("\\($alternation)\\", 'IgnoreCase')
-        }
+        # Excluded dir names as a case-insensitive HashSet for O(1) lookup during
+        # the recursive walk. We prune by name BEFORE entering the directory, so
+        # node_modules / .git trees never get traversed in the first place.
+        $excludeNames = [System.Collections.Generic.HashSet[string]]::new(
+            [System.StringComparer]::OrdinalIgnoreCase)
+        foreach ($d in $excludeDirs) { [void]$excludeNames.Add($d) }
 
         $selectStringArgs = @{ CaseSensitive = $caseSensitive; Pattern = $highlightSource }
         if ($invertMatch)                              { $selectStringArgs['NotMatch'] = $true }
@@ -566,7 +654,7 @@ function grep {
         # inside ForEach-Object's child scope propagate back. -c accumulates and
         # prints once at the end; -l prints each path on first hit; default mode
         # renders match (and context) inline.
-        $state        = @{ Total = 0 }
+        $state        = @{ Total = 0; HadError = $false }
         $seenPaths    = [System.Collections.Generic.HashSet[string]]::new()
         $counts       = [ordered]@{}
         $shownPerFile = @{}  # for -m: matches emitted per file
@@ -574,23 +662,71 @@ function grep {
         $hasContext   = $beforeCtx -gt 0 -or $afterCtx -gt 0
 
         # Reusable file enumeration with --include / --exclude / --exclude-dir filters.
+        # Walks the tree manually with [System.IO.Directory] (much faster than
+        # Get-ChildItem -Recurse: no FileInfo PSObject construction per entry,
+        # and we can prune excluded subdirectories BEFORE entering them).
+        # Errors (e.g. Permission denied on a subdirectory during -r) are emitted
+        # via Write-Error so the outer 2>&1 wrappers can render them GNU-style.
+        $hasInclude = $include.Count -gt 0
+        $hasExclude = $exclude.Count -gt 0
         $produceFiles = {
-            $files = Get-ChildItem -Path $Path -Recurse:$recurse -File -ErrorAction SilentlyContinue
-            if ($excludeRegex -or $include.Count -gt 0 -or $exclude.Count -gt 0) {
-                $files = $files | Where-Object {
-                    if ($excludeRegex -and $excludeRegex.IsMatch($_.FullName)) { return $false }
-                    if ($include.Count -gt 0) {
-                        $ok = $false
-                        foreach ($g in $include) { if ($_.Name -like $g) { $ok = $true; break } }
-                        if (-not $ok) { return $false }
+            # Single-file target: emit it and stop. The path was already validated
+            # with Test-Path above, so this branch can't fail.
+            if (Test-Path -LiteralPath $Path -PathType Leaf) {
+                [System.IO.FileInfo]::new((Resolve-Path -LiteralPath $Path).ProviderPath)
+                return
+            }
+
+            $rootDir = (Resolve-Path -LiteralPath $Path).ProviderPath
+            $stack   = [System.Collections.Generic.Stack[string]]::new()
+            $stack.Push($rootDir)
+
+            while ($stack.Count -gt 0) {
+                $dir = $stack.Pop()
+                $dirAccessible = $true
+
+                # Files in this directory. Inline the include/exclude filters to
+                # avoid scriptblock-call overhead in the hot path.
+                try {
+                    foreach ($f in [System.IO.Directory]::EnumerateFiles($dir)) {
+                        if ($hasInclude) {
+                            $name = [System.IO.Path]::GetFileName($f)
+                            $ok = $false
+                            foreach ($g in $include) { if ($name -like $g) { $ok = $true; break } }
+                            if (-not $ok) { continue }
+                        }
+                        if ($hasExclude) {
+                            if (-not $hasInclude) { $name = [System.IO.Path]::GetFileName($f) }
+                            $skip = $false
+                            foreach ($g in $exclude) { if ($name -like $g) { $skip = $true; break } }
+                            if ($skip) { continue }
+                        }
+                        [System.IO.FileInfo]::new($f)
                     }
-                    if ($exclude.Count -gt 0) {
-                        foreach ($g in $exclude) { if ($_.Name -like $g) { return $false } }
+                } catch [System.UnauthorizedAccessException] {
+                    $err = [System.UnauthorizedAccessException]::new("Access to the path '$dir' is denied.")
+                    Write-Error -Exception $err -TargetObject $dir -Category PermissionDenied
+                    $dirAccessible = $false
+                }
+
+                # If the directory itself is denied, EnumerateDirectories would
+                # raise the same error — skip it so we report Permission denied once.
+                if (-not $recurse -or -not $dirAccessible) { continue }
+
+                # Subdirectories: drop excluded names, push the rest in reverse so
+                # the stack pops them in alphabetical order (matches GNU grep).
+                try {
+                    $kept = [System.Collections.Generic.List[string]]::new()
+                    foreach ($s in [System.IO.Directory]::EnumerateDirectories($dir)) {
+                        $sn = [System.IO.Path]::GetFileName($s)
+                        if (-not $excludeNames.Contains($sn)) { $kept.Add($s) }
                     }
-                    $true
+                    for ($i = $kept.Count - 1; $i -ge 0; $i--) { $stack.Push($kept[$i]) }
+                } catch [System.UnauthorizedAccessException] {
+                    $err = [System.UnauthorizedAccessException]::new("Access to the path '$dir' is denied.")
+                    Write-Error -Exception $err -TargetObject $dir -Category PermissionDenied
                 }
             }
-            $files
         }
 
         # Match producer shared by -q and default rendering.
@@ -602,10 +738,17 @@ function grep {
             & $produceFiles | Select-String @selectStringArgs
         }
 
-        # -q: stop at first match, print nothing. Select-Object -First 1 closes
-        # the upstream pipeline so Select-String can short-circuit on the first hit.
+        # -q: suppress match output. I/O errors (Permission denied, etc.) still
+        # print, matching GNU grep — silencing them is what -s/--no-messages is for.
+        # Select-Object -First 1 closes the upstream pipeline so Select-String can
+        # short-circuit on the first hit.
         if ($quietMode) {
-            if (-not (& $produceMatches | Select-Object -First 1)) { $global:LASTEXITCODE = 1 }
+            $hit = & $produceMatches 2>&1 | ForEach-Object {
+                if ($_ -is [System.Management.Automation.ErrorRecord]) { if (-not $noMessages) { Write-GrepError $_ }; $state.HadError = $true; return }
+                $_
+            } | Select-Object -First 1
+            if (-not $hit)        { $global:LASTEXITCODE = 1 }
+            if ($state.HadError)  { $global:LASTEXITCODE = 2 }
             return
         }
 
@@ -619,9 +762,15 @@ function grep {
                 }
                 if (-not $hit) { Write-Host '(standard input)' -ForegroundColor Magenta; $state.Total++ }
             } else {
-                $allFiles = @(& $produceFiles)
+                $allFiles = @(& $produceFiles 2>&1 | ForEach-Object {
+                    if ($_ -is [System.Management.Automation.ErrorRecord]) { if (-not $noMessages) { Write-GrepError $_ }; $state.HadError = $true; return }
+                    $_
+                })
                 $matchedSet = [System.Collections.Generic.HashSet[string]]::new()
-                $allFiles | Select-String @selectStringArgs | ForEach-Object { [void]$matchedSet.Add($_.Path) }
+                $allFiles | Select-String @selectStringArgs 2>&1 | ForEach-Object {
+                    if ($_ -is [System.Management.Automation.ErrorRecord]) { if (-not $noMessages) { Write-GrepError $_ }; $state.HadError = $true; return }
+                    [void]$matchedSet.Add($_.Path)
+                }
                 foreach ($f in $allFiles) {
                     if (-not $matchedSet.Contains($f.FullName)) {
                         Write-Host $f.FullName -ForegroundColor Magenta
@@ -630,10 +779,12 @@ function grep {
                 }
             }
             if ($state.Total -eq 0) { $global:LASTEXITCODE = 1 }
+            if ($state.HadError)    { $global:LASTEXITCODE = 2 }
             return
         }
 
-        & $produceMatches | ForEach-Object {
+        & $produceMatches 2>&1 | ForEach-Object {
+            if ($_ -is [System.Management.Automation.ErrorRecord]) { if (-not $noMessages) { Write-GrepError $_ }; $state.HadError = $true; return }
             $mi = $_
 
             # -m per-file cap: skip emission once a file has reached its quota.
@@ -717,6 +868,7 @@ function grep {
         }
 
         if ($state.Total -eq 0) { $global:LASTEXITCODE = 1 }
+        if ($state.HadError)    { $global:LASTEXITCODE = 2 }
     }
 }
 
