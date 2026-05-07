@@ -102,7 +102,9 @@ function grep {
         $afterCtx = -1; $beforeCtx = -1; $ctxBoth = -1; $maxCount = -1
 
         $excludeDirs = [System.Collections.Generic.List[string]]::new()
-        foreach ($d in (Get-GrepAlwaysExcludedDirs)) { $excludeDirs.Add($d) }
+        if ($null -ne $global:GrepAlwaysExcludedDirs) {
+            foreach ($d in $global:GrepAlwaysExcludedDirs) { $excludeDirs.Add($d) }
+        }
         $include   = [System.Collections.Generic.List[string]]::new()
         $exclude   = [System.Collections.Generic.List[string]]::new()
         $ePatterns = [System.Collections.Generic.List[string]]::new()
